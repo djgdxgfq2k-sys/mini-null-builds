@@ -93,6 +93,12 @@ import UIKit
             ink.endStroke()
             try await Task.sleep(nanoseconds: 600_000_000)
             let dry = darkest(window, around: point)
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            let screen = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let shot = XCTAttachment(image: screen); shot.name = "touch-routing-finger-\(finger)-at-\(Int(point.x))x\(Int(point.y))"; shot.lifetime = .keepAlways; add(shot)
+            let layers = allViews(ink.superview ?? ink).map { "\(type(of: $0)) hidden=\($0.isHidden) alpha=\($0.alpha) frame=\($0.frame.integral)" }.joined(separator: " | ")
+            let canvasStrokes = allViews(window).compactMap { $0 as? PageInkCanvas }.map { $0.drawing.strokes.count }
+            print("TOUCHDIAG finger=\(finger) wet=\(wet) dry=\(dry) canvasStrokes=\(canvasStrokes) style=\(ink.traitCollection.userInterfaceStyle.rawValue) layers: \(layers)")
             XCTAssertLessThan(wet, 300, "finger=\(finger): stroke is invisible while drawing (darkest pixel sum \(wet), white = 765)")
             XCTAssertLessThan(dry, 300, "finger=\(finger): stroke is invisible after lifting (darkest pixel sum \(dry), white = 765)")
             window.isHidden = true
