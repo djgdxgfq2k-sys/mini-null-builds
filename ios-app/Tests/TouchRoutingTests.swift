@@ -83,7 +83,7 @@ import PencilKit
             let screen = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
             let shot = XCTAttachment(image: screen); shot.name = "touch-routing-finger-\(finger)"; shot.lifetime = .keepAlways; add(shot)
             XCTAssertLessThan(dry, 300, "finger=\(finger): black ink is invisible on the page (darkest pixel sum \(dry), white = 765)")
-            window.isHidden = true
+            window.isHidden = true; window.rootViewController = nil
         }
     }
 }

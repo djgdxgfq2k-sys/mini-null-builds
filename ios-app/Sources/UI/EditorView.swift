@@ -59,7 +59,8 @@ import PDFKit
         .overlay { pencilGestures }
         .modifier(EditorPageImport(bookID: bookID, commands: commands, pageIndex: $pageIndex, request: $pageMedia))
         .onAppear {
-            commands.reportError = { store.error = $0 }
+            // Errors can arrive while SwiftUI tears the editor down; publish them on the next run loop turn.
+            commands.reportError = { message in DispatchQueue.main.async { store.error = message } }
             commands.didFinishErasing = { if settings.eraserAutoDeselect && settings.tool == .eraser { settings.tool = .pen } }
         }
         .onChange(of: settings.color) { _, color in InkPaletteStore().remember(color) }
