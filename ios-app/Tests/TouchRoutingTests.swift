@@ -15,6 +15,26 @@ import UIKit
         return parts.joined(separator: " < ")
     }
 
+    /// Darkest pixel (r+g+b) in a small box of the rendered window, so 765 means pure white.
+    private func darkest(_ window: UIWindow, around point: CGPoint) -> Int {
+        let box = CGRect(x: point.x - 40, y: point.y - 12, width: 80, height: 24)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: box.size, format: format).image { context in
+            context.cgContext.translateBy(x: -box.minX, y: -box.minY)
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        guard let cg = image.cgImage else { return 765 }
+        let width = cg.width, height = cg.height
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        var best = 765
+        for i in stride(from: 0, to: pixels.count, by: 4) { best = min(best, Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])) }
+        return best
+    }
+
     func testPageTouchLandsOnInkLayerForPencilAndFinger() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -24,7 +44,7 @@ import UIKit
         let book = try XCTUnwrap(store.items.first(where: { !$0.folder }))
         store.open(book.id)
         for finger in [false, true] {
-            var settings = ToolSettings(); settings.tool = .pen; settings.finger = finger
+            var settings = ToolSettings(); settings.tool = .pen; settings.finger = finger; settings.width = 4
             ToolSettingsStore.save(settings)
             let host = UIHostingController(rootView: AnyView(EditorView(bookID: book.id).environmentObject(store).preferredColorScheme(.dark)))
             host.overrideUserInterfaceStyle = .dark
@@ -47,7 +67,9 @@ import UIKit
             var claims: [String] = []
             var view: UIView? = ink
             while let current = view {
-                for g in current.gestureRecognizers ?? [] where g.isEnabled && g.cancelsTouchesInView {
+                for g in current.gestureRecognizers ?? [] where g.isEnabled && g.cancelsTouchesInView
+                    && (g is UIPanGestureRecognizer || g is UILongPressGestureRecognizer || g is UISwipeGestureRecognizer)
+                    && !String(describing: type(of: g)).hasPrefix("_") && !String(describing: type(of: g)).contains("Knob") {
                     let types = g.allowedTouchTypes.map { $0.intValue }
                     let pencil = types.contains(UITouch.TouchType.pencil.rawValue)
                     let direct = types.contains(UITouch.TouchType.direct.rawValue)
@@ -61,6 +83,18 @@ import UIKit
                 view = current.superview
             }
             XCTAssertTrue(claims.isEmpty, "finger=\(finger): drags can be taken away from the ink layer by: \(claims.joined(separator: "; "))")
+
+            // Draw through the same entry points touches use, then look at the real screen pixels.
+            let start = ink.convert(point, from: window)
+            let source: UITouch.TouchType = finger ? .direct : .pencil
+            ink.beginStroke(InkSample(point: CGPoint(x: start.x - 60, y: start.y), time: 0), source: source)
+            ink.addSamples((1...30).map { InkSample(point: CGPoint(x: start.x - 60 + CGFloat($0) * 4, y: start.y), time: Double($0) / 120) })
+            let wet = darkest(window, around: point)
+            ink.endStroke()
+            try await Task.sleep(nanoseconds: 600_000_000)
+            let dry = darkest(window, around: point)
+            XCTAssertLessThan(wet, 300, "finger=\(finger): stroke is invisible while drawing (darkest pixel sum \(wet), white = 765)")
+            XCTAssertLessThan(dry, 300, "finger=\(finger): stroke is invisible after lifting (darkest pixel sum \(dry), white = 765)")
             window.isHidden = true
         }
     }
