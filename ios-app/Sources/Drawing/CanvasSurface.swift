@@ -1,0 +1,512 @@
+import SwiftUI
+import PencilKit
+import PDFKit
+import Combine
+
+enum EditorTool: String, CaseIterable, Codable {
+    case pen, pencil, eraser, marker, shapes, geometry, lasso, elements, text, laser
+    var symbol: String {
+        switch self {
+        case .pen: return "pencil.tip"
+        case .pencil: return "pencil"
+        case .eraser: return "eraser"
+        case .marker: return "highlighter"
+        case .shapes: return "square.on.circle"
+        case .geometry: return "square.triangle.circle"
+        case .lasso: return "lasso"
+        case .elements: return "star.square"
+        case .text: return "textformat"
+        case .laser: return "laser.burst"
+        }
+    }
+    var label: String {
+        switch self {
+        case .pen: return "Stift"
+        case .pencil: return "Bleistift"
+        case .eraser: return "Radierer"
+        case .marker: return "Textmarker"
+        case .shapes: return "Formen"
+        case .geometry: return "Formen"
+        case .lasso: return "Lasso"
+        case .elements: return "Elemente"
+        case .text: return "Textfeld"
+        case .laser: return "Laserpointer"
+        }
+    }
+}
+struct ToolSettings: Equatable, Codable {
+    var tool = EditorTool.pen
+    var color = "#000001"
+    var width: CGFloat = 1
+    var widthPresets: [CGFloat] = [1, 2, 4]
+    var strokePattern = StrokePattern.solid
+    var geometricShape = GeometricShape.ellipse
+    var fillOpacity = 1.0
+    var finger = false
+    var readOnly = false
+    var pencilConnected = true
+    var pressureMode = StylusPressureMode.automatic
+    var toolbarTools: Set<EditorTool> = [.lasso, .pen, .eraser, .geometry, .laser]
+    var stabilization = 0.22
+    var highlighterStabilization = 1.0
+    var reduceLatency = true
+    var holdForShapes = true
+    var drawAndHold = true
+    var rectangularLasso = false
+    var selectShapes = true
+    var selectArrows = true
+    var selectEquations = false
+    var selectTape = false
+    var selectNotes = false
+    var laserTrail = true
+    var penStyle = PenStyle.ballpoint
+    var eraserStyle = EraserStyle.stroke
+    var eraserSize = 0
+    var eraserFilters = EraserFilters()
+    var eraserAutoDeselect = false
+    var eraserDiameter: CGFloat { [8, 16, 64][min(2, max(0, eraserSize))] }
+    var pressure = 0.5
+    var sharpness = 0.5
+    var tipRoundness = 0.5
+    var reactToSpeed = false
+    var barrelRoll = false
+    var highlighterOnly = false
+    var straightHighlighter = false
+    var fillShapes = false
+    var roundedShapes = false
+    var selectHandwriting = true
+    var selectImages = true
+    var selectText = true
+}
+enum PenStyle: String, Codable, CaseIterable { case fountain = "Füllfederhalter", ballpoint = "Kugelschreiber", brush = "Pinselstift" }
+enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsradierer", standard = "Standardradierer", stroke = "Strichradierer" }
+
+@MainActor final class CanvasCommands: ObservableObject {
+    weak var target: CanvasSurface.Coordinator? { didSet { if oldValue !== target { refreshUndo() } } }
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    var toggleKnight: (() -> Void)?
+    var requestStudio: (() -> Void)?
+    var reportError: (String) -> Void = { _ in }
+    var didFinishErasing: (() -> Void)?
+    func undo() { target?.perform { [weak self] in self?.target?.canvas?.undoManager?.undo(); self?.refreshUndo() } }
+    func redo() { target?.perform { [weak self] in self?.target?.canvas?.undoManager?.redo(); self?.refreshUndo() } }
+    func snapshot() -> PKDrawing { target?.drawing ?? PKDrawing() }
+    func append(_ strokes: [PKStroke]) { target?.append(strokes) }
+    func flush() { target?.viewport?.inkInput.finishPendingStroke(); target?.persist() }
+    func refreshUndo() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let undo = self.target?.canvas?.undoManager?.canUndo ?? false, redo = self.target?.canvas?.undoManager?.canRedo ?? false
+            if self.canUndo != undo { self.canUndo = undo }; if self.canRedo != redo { self.canRedo = redo }
+        }
+    }
+    func afterInput(onFailure: (() -> Void)? = nil, _ action: @escaping () -> Void) {
+        if let target { target.perform { if target.persist() { action() } else { onFailure?() } } }
+        else { action() }
+    }
+}
+
+@MainActor struct CanvasSurface: UIViewRepresentable {
+    let page: NotebookPage
+    let directory: URL
+    let settings: ToolSettings
+    let commands: CanvasCommands
+
+    func makeCoordinator() -> Coordinator { Coordinator(page: page, directory: directory, commands: commands) }
+    func makeUIView(context: Context) -> PageViewport {
+        let view = PageViewport(page: page, directory: directory)
+        context.coordinator.attach(view)
+        context.coordinator.configure(settings)
+        return view
+    }
+    func updateUIView(_ view: PageViewport, context: Context) {
+        // Page orientation/layout and input configuration never reload the authoritative drawing.
+        view.updatePage(page)
+        context.coordinator.configure(settings)
+    }
+    static func dismantleUIView(_ view: PageViewport, coordinator: Coordinator) {
+        view.inkInput.finishPendingStroke(); coordinator.persist(); view.canvas.delegate = nil
+    }
+
+    @MainActor final class Coordinator: NSObject, PKCanvasViewDelegate, UIScrollViewDelegate {
+        private(set) var drawing = PKDrawing()
+        private(set) var usingTool = false
+        private var queued: [() -> Void] = []
+        private var inputGeneration = 0
+        private var filteredEraseBefore: PKDrawing?
+        private var filteredEraseChanged = false
+        private var cancelledInput = false
+        private var currentSettings: ToolSettings?
+        private var writable = true
+        private let page: NotebookPage
+        private let directory: URL
+        private weak var commands: CanvasCommands?
+        weak var canvas: PKCanvasView?
+        weak var viewport: PageViewport?
+        var onActivate: (() -> Void)?
+        init(page: NotebookPage, directory: URL, commands: CanvasCommands) {
+            self.page = page; self.directory = directory; self.commands = commands
+            super.init()
+            do { drawing = try DrawingDisk.load(directory, page.id) }
+            catch { writable = false; DispatchQueue.main.async { commands.reportError("Gespeicherte Zeichnung konnte nicht geladen werden. Sie wird nicht überschrieben: \(error.localizedDescription)") } }
+        }
+        func attach(_ view: PageViewport) {
+            viewport = view; canvas = view.canvas
+            // Only initialization assigns persisted state; the delegate is installed afterwards.
+            view.canvas.drawing = drawing
+            view.canvas.delegate = self; view.scroll.delegate = self
+            view.canvas.isUserInteractionEnabled = writable
+            commands?.target = self
+            view.onError = { [weak self] in self?.commands?.reportError($0) }
+            if let error = view.textReadError { commands?.reportError(error) }
+            view.onShape = { [weak self] points, closed in
+                guard let self, let settings = self.currentSettings else { return }
+                self.append(GeometricInk.strokes(points: points, settings: settings, closed: closed))
+            }
+            view.onInteraction = { [weak self] active in
+                guard let self else { return }
+                if active {
+                    self.inputGeneration += 1; self.usingTool = true; self.cancelledInput = false; self.commands?.target = self; self.onActivate?()
+                    if self.currentSettings?.tool == .eraser && self.currentSettings?.eraserFilters.allEnabled == false { self.filteredEraseBefore = self.drawing; self.filteredEraseChanged = false }
+                } else { self.finishFilteredErase(); self.finishToolUse() }
+            }
+            view.inkInput.onInteraction = view.onInteraction
+            view.lasso.onInteraction = view.onInteraction
+            view.lasso.drawing = { [weak self] in self?.drawing ?? PKDrawing() }
+            view.lasso.commit = { [weak self] next in
+                guard let self, self.writable, let canvas = self.canvas else { return }
+                self.replaceByUserCommand(next, canvas: canvas)
+            }
+            view.inkInput.onCommit = { [weak self] strokes in
+                guard let self, self.writable, let canvas = self.canvas, !strokes.isEmpty else { return }
+                self.replaceByUserCommand(PKDrawing(strokes: self.drawing.strokes + strokes), canvas: canvas)
+            }
+            view.inkInput.snapShape = { [weak self] shape in
+                guard let self else { return shape }
+                let anchors = self.drawing.strokes.flatMap { stroke -> [CGPoint] in
+                    [stroke.path.first, stroke.path.last].compactMap { $0?.location.applying(stroke.transform) }
+                }
+                return shape.snapped(to: anchors)
+            }
+            view.onErase = { [weak self] points in
+                guard let self, let settings = self.currentSettings, settings.tool == .eraser, !settings.readOnly else { return }
+                guard let canvas = self.canvas, self.writable,
+                      let next = FilteredEraser.erase(self.drawing, points: points, diameter: settings.eraserDiameter, style: settings.eraserStyle, filters: settings.eraserFilters) else { return }
+                if self.filteredEraseBefore != nil {
+                    // This input surface owns the gesture; native wet ink is disabled while it erases.
+                    self.filteredEraseChanged = true; self.drawing = next; canvas.drawing = next
+                } else { self.replaceByUserCommand(next, canvas: canvas) }
+            }
+            view.onEraseCancelled = { [weak self] in
+                guard let self else { return }
+                if let before = self.filteredEraseBefore, let canvas = self.canvas {
+                    self.drawing = before; canvas.drawing = before; self.persist()
+                }
+                self.filteredEraseBefore = nil; self.filteredEraseChanged = false; self.cancelledInput = true
+            }
+            do { view.original.ink = try NotebookArchive.originalInk(page: page, directory: directory) }
+            catch { commands?.reportError("Originalebene nicht lesbar: \(error.localizedDescription)") }
+        }
+        func configure(_ settings: ToolSettings) {
+            guard settings != currentSettings, let canvas else { return }
+            // Do not swap a live Pencil tool during a stroke.
+            if usingTool { queued.append { [weak self] in self?.configure(settings) }; return }
+            currentSettings = settings
+            switch settings.tool {
+            case .eraser: canvas.tool = settings.eraserStyle == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: settings.eraserDiameter)
+            case .lasso: canvas.tool = PKLassoTool()
+            case .marker: canvas.tool = PKInkingTool(.marker, color: UIColor(hex: settings.color).withAlphaComponent(0.35), width: max(12,settings.width * 6))
+            case .pencil: canvas.tool = PKInkingTool(.pencil, color: UIColor(hex: settings.color), width: settings.width)
+            default:
+                let ink: PKInkingTool.InkType = settings.penStyle == .fountain ? .fountainPen : .pen
+                canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width)
+            }
+            canvas.drawingPolicy = settings.finger || !settings.pencilConnected ? .anyInput : .pencilOnly
+            let drawingTouches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)
+            canvas.drawingGestureRecognizer.allowedTouchTypes = drawingTouches.map { NSNumber(value: $0.rawValue) }
+            viewport?.setTool(settings, writable: writable && !settings.readOnly)
+            viewport?.scroll.panGestureRecognizer.minimumNumberOfTouches = settings.readOnly || (settings.pencilConnected && !settings.finger) ? 1 : 2
+        }
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; commands?.target = self; onActivate?() }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
+            drawing = canvasView.drawing
+            if filteredEraseBefore == nil { persist() }; commands?.refreshUndo()
+        }
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            drawing = canvasView.drawing; persist()
+            finishToolUse()
+        }
+        func canvasViewDidFinishRendering(_ canvasView: PKCanvasView) { viewport?.inkInput.committedCanvasDidRender() }
+        private func finishToolUse() {
+            let erasing = currentSettings?.tool == .eraser && !cancelledInput
+            let generation = inputGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.inputGeneration == generation else { return }
+                self.usingTool = false
+                let pending = self.queued; self.queued.removeAll()
+                for action in pending { action() }
+                if erasing { self.commands?.didFinishErasing?() }
+                self.commands?.refreshUndo()
+            }
+        }
+        @discardableResult func persist() -> Bool {
+            guard writable else { return true }
+            do { try DrawingDisk.save(drawing, directory: directory, page: page.id); return true }
+            catch { commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)"); return false }
+        }
+        func perform(_ action: @escaping () -> Void) { if usingTool { queued.append(action) } else { action() } }
+        func append(_ strokes: [PKStroke]) {
+            perform { [weak self] in
+                guard let self, let canvas = self.canvas, self.writable else { return }
+                self.replaceByUserCommand(PKDrawing(strokes: self.drawing.strokes + strokes), canvas: canvas)
+            }
+        }
+        private func replaceByUserCommand(_ next: PKDrawing, canvas: PKCanvasView) {
+            let before = drawing
+            registerUndo(before, canvas: canvas)
+            drawing = next; canvas.drawing = next; persist(); commands?.refreshUndo()
+        }
+        private func registerUndo(_ before: PKDrawing, canvas: PKCanvasView) {
+            canvas.undoManager?.registerUndo(withTarget: self) { target in
+                guard let c = target.canvas else { return }; target.viewport?.lasso.clearSelection(animated: false); target.replaceByUserCommand(before, canvas: c)
+            }
+        }
+        private func finishFilteredErase() {
+            if filteredEraseChanged, let before = filteredEraseBefore, let canvas { registerUndo(before, canvas: canvas); persist() }
+            filteredEraseBefore = nil; filteredEraseChanged = false
+        }
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { viewport?.content }
+        func scrollViewDidZoom(_ scrollView: UIScrollView) { viewport?.centerPage() }
+    }
+}
+
+final class PaperView: UIView {
+    var page: NotebookPage
+    let pdf: PDFDocument?
+    init(page: NotebookPage, directory: URL) {
+        self.page = page
+        pdf = page.pdf.flatMap { PDFDocument(url: directory.appendingPathComponent($0)) }
+        super.init(frame: CGRect(origin: .zero, size: page.nativeSize)); backgroundColor = .white
+        contentMode = .redraw
+    }
+    required init?(coder: NSCoder) { nil }
+    override func draw(_ rect: CGRect) {
+        guard let c = UIGraphicsGetCurrentContext() else { return }
+        c.setFillColor(UIColor(hex: page.paperColor ?? "#FFFFFF").cgColor); c.fill(bounds)
+        if let p = pdf?.page(at: page.pdfPage) {
+            c.saveGState(); c.translateBy(x: 0, y: bounds.height); c.scaleBy(x: 1, y: -1)
+            let box = p.bounds(for: .cropBox)
+            guard box.width > 0, box.height > 0 else { c.restoreGState(); return }
+            c.scaleBy(x: bounds.width / box.width, y: bounds.height / box.height)
+            c.translateBy(x: -box.minX, y: -box.minY); p.draw(with: .cropBox, to: c); c.restoreGState()
+        } else { Self.paint(c, bounds: bounds, paper: page.paper) }
+    }
+    static func paint(_ c: CGContext, bounds: CGRect, paper: String) {
+        guard paper != "blank" else { return }
+        // Pattern geometry from the supplied GNDynamicTemplates bundle.
+        c.setStrokeColor(UIColor(hex: "#D0D2D3").cgColor); c.setLineWidth(0.5)
+        if paper == "dotted" {
+            c.setFillColor(UIColor(hex: "#D0D2D3").cgColor)
+            for y in stride(from: CGFloat(15), to: bounds.height, by: 16) { for x in stride(from: CGFloat(10), to: bounds.width, by: 16) { c.fillEllipse(in: CGRect(x: x, y: y, width: 1, height: 1)) } }
+            return
+        }
+        let gap: CGFloat = paper == "wide" ? 25 : 16
+        let top: CGFloat = paper == "grid" ? 8 : 50
+        let bottom = paper == "grid" ? bounds.height : min(bounds.height, top + bounds.height * 0.8)
+        for y in stride(from: top, to: bottom, by: gap) { c.move(to: CGPoint(x:0,y:y)); c.addLine(to: CGPoint(x:bounds.width,y:y)) }
+        if paper == "grid" { for x in stride(from: CGFloat(8), to: bounds.width, by: 16) { c.move(to: CGPoint(x:x,y:0)); c.addLine(to: CGPoint(x:x,y:bounds.height)) } }
+        c.strokePath()
+    }
+}
+
+struct TextBox: Codable { var text: String; var x: Double; var y: Double; var width: Double; var height: Double }
+
+extension PKDrawing {
+    /// Paper is always light. PencilKit adapts ink to the current appearance, which would turn black ink white in the dark app UI.
+    func paperImage(from rect: CGRect, scale: CGFloat) -> UIImage {
+        var image = UIImage()
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent { image = self.image(from: rect, scale: scale) }
+        return image
+    }
+}
+
+final class PageInkCanvas: PKCanvasView {
+    private let pageUndo = UndoManager()
+    override var undoManager: UndoManager? { pageUndo }
+}
+
+final class PageViewport: UIView, UITextViewDelegate {
+    let scroll = UIScrollView()
+    let content: UIView
+    let document: UIView
+    let canvas = PageInkCanvas()
+    let inkInput = InkInputView(frame: .zero)
+    let original = OriginalInkView()
+    let interaction = UIView()
+    let lasso = LassoSelectionView(frame: .zero)
+    private let laser = CAShapeLayer()
+    private var tool = EditorTool.pen
+    private var shape = GeometricShape.ellipse
+    private var panInput: UIPanGestureRecognizer?
+    private var tapInput: UITapGestureRecognizer?
+    private var points: [CGPoint] = []
+    var laserTrail = true
+    private var start = CGPoint.zero
+    private var boxes: [UITextView] = []
+    private var textWritable = true
+    private(set) var textReadError:String?
+    var onError:((String)->Void)?
+    private let textURL: URL
+    private var lastBounds = CGSize.zero
+    private var pageMetadata: NotebookPage?
+    var onShape: (([CGPoint], Bool) -> Void)?
+    var onInteraction: ((Bool) -> Void)?
+    var onErase: (([CGPoint]) -> Void)?
+    var onEraseCancelled: (() -> Void)?
+    private var eraserDiameter: CGFloat = 8
+    init(page: NotebookPage, directory: URL) {
+        content = UIView(frame: CGRect(origin: .zero, size: page.size))
+        document = UIView(frame: CGRect(origin: .zero, size: page.nativeSize))
+        textURL = directory.appendingPathComponent(page.id + ".texts.json")
+        super.init(frame: .zero); backgroundColor = UIColor(hex: "#1B1C1C")
+        // Page surfaces stay light so PencilKit renders ink in its true colors inside the dark app chrome.
+        document.overrideUserInterfaceStyle = .light
+        addSubview(scroll); scroll.addSubview(content); content.addSubview(document); document.addSubview(PaperView(page: page, directory: directory))
+        original.frame = document.bounds; original.backgroundColor = .clear; original.isUserInteractionEnabled = false; document.addSubview(original)
+        canvas.frame = document.bounds; canvas.backgroundColor = .clear; canvas.isOpaque = false
+        canvas.maximumSupportedContentVersion = .latest
+        canvas.isScrollEnabled = false; canvas.minimumZoomScale = 1; canvas.maximumZoomScale = 1
+        document.addSubview(canvas)
+        inkInput.frame = document.bounds; inkInput.managedUndo = canvas.undoManager; document.addSubview(inkInput)
+        interaction.frame = document.bounds; interaction.backgroundColor = .clear; interaction.isHidden = true; document.addSubview(interaction)
+        lasso.frame = document.bounds; lasso.isHidden = true; document.addSubview(lasso)
+        scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = 4; scroll.contentSize = content.bounds.size
+        scroll.panGestureRecognizer.minimumNumberOfTouches = 2
+        scroll.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        content.layer.shadowColor = UIColor.black.cgColor; content.layer.shadowOpacity = 0.13; content.layer.shadowRadius = 12; content.layer.shadowOffset = CGSize(width: 0,height: 4)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:))); tapInput = tap; interaction.addGestureRecognizer(tap)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:))); panInput = pan; interaction.addGestureRecognizer(pan)
+        laser.strokeColor = UIColor.systemRed.cgColor; laser.lineWidth = 3; laser.fillColor = nil; laser.lineCap = .round; interaction.layer.addSublayer(laser)
+        if FileManager.default.fileExists(atPath:textURL.path) {
+            do { let saved = try JSONDecoder().decode([TextBox].self,from:Data(contentsOf:textURL)); for box in saved { addText(box) } }
+            catch { textWritable = false; textReadError = "Textfelder konnten nicht geladen werden und werden nicht überschrieben: \(error.localizedDescription)" }
+        }
+        updatePage(page)
+    }
+    required init?(coder: NSCoder) { nil }
+    func updatePage(_ page: NotebookPage) {
+        guard page != pageMetadata else { return }; pageMetadata = page
+        content.bounds.size = page.size
+        document.transform = .identity; document.bounds = CGRect(origin: .zero, size: page.nativeSize)
+        document.center = CGPoint(x: content.bounds.midX, y: content.bounds.midY)
+        document.transform = CGAffineTransform(rotationAngle: CGFloat(page.quarterTurns) * .pi / 2)
+        original.frame = document.bounds; canvas.frame = document.bounds; inkInput.frame = document.bounds; interaction.frame = document.bounds; lasso.frame = document.bounds
+        if let paper = document.subviews.first as? PaperView { paper.page = page; paper.frame = document.bounds; paper.setNeedsDisplay() }
+        scroll.contentSize = CGSize(width: page.size.width * scroll.zoomScale, height: page.size.height * scroll.zoomScale)
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews(); scroll.frame = bounds
+        if bounds.size != lastBounds && bounds.width > 0 {
+            let initial = lastBounds == .zero
+            lastBounds = bounds.size
+            if initial { scroll.zoomScale = max(0.1,min(4,min((bounds.width - 88) / content.bounds.width, (bounds.height - 88) / content.bounds.height))) }
+            centerPage()
+        }
+    }
+    func centerPage() {
+        let size = scroll.contentSize
+        scroll.contentInset = UIEdgeInsets(top: max(64,(bounds.height-size.height)/2), left: max(24,(bounds.width-size.width)/2), bottom: 32, right: max(24,(bounds.width-size.width)/2))
+    }
+    func setTool(_ settings: ToolSettings, writable: Bool) {
+        let tool = settings.tool; self.tool = tool; shape = settings.geometricShape
+        laserTrail = settings.laserTrail
+        let overlay = [.geometry,.elements,.text,.laser].contains(tool) || (tool == .eraser && !settings.eraserFilters.allEnabled)
+        eraserDiameter = settings.eraserDiameter
+        let writing = [.pen, .pencil, .marker, .shapes].contains(tool)
+        canvas.isUserInteractionEnabled = writable && !overlay && !writing && tool != .lasso
+        inkInput.configure(settings, writable: writable)
+        interaction.isHidden = !overlay || !writable
+        let touches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)
+        panInput?.allowedTouchTypes = touches.map { NSNumber(value: $0.rawValue) }
+        let lassoActive = tool == .lasso && writable
+        if !lassoActive && !lasso.isHidden { lasso.clearSelection(animated: false) }
+        lasso.isHidden = !lassoActive; lasso.rectangular = settings.rectangularLasso; lasso.setAllowedTouches(touches)
+        tapInput?.allowedTouchTypes = (tool == .eraser ? touches : [.direct, .pencil, .indirectPointer]).map { NSNumber(value: $0.rawValue) }
+        laser.strokeColor = (tool == .laser ? UIColor.systemRed : UIColor(hex: settings.color)).cgColor
+        laser.lineWidth = tool == .laser ? 3 : settings.width
+        laser.fillColor = tool == .geometry && shape.isClosed && settings.fillShapes ? UIColor(hex: settings.color).withAlphaComponent(CGFloat(settings.fillOpacity)).cgColor : nil
+        laser.shadowColor = UIColor.systemRed.cgColor; laser.shadowOpacity = tool == .laser ? 0.8 : 0; laser.shadowRadius = tool == .laser ? 4 : 0
+        for box in boxes { box.isUserInteractionEnabled = tool == .text && writable }
+        if tool != .text || !writable { endEditing(true) }
+    }
+    @objc private func tap(_ recognizer: UITapGestureRecognizer) {
+        let p = recognizer.location(in: document)
+        if tool == .eraser { onInteraction?(true); onErase?([p]); onInteraction?(false); return }
+        if tool == .laser {
+            laser.removeAllAnimations(); laser.fillColor = UIColor.systemRed.cgColor
+            laser.path = UIBezierPath(ovalIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)).cgPath
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 1; fade.toValue = 0; fade.duration = 0.6; laser.opacity = 0; laser.add(fade, forKey: "fade")
+            return
+        }
+        if tool == .text && textWritable { addText(TextBox(text: "", x: p.x, y: p.y, width: min(240,document.bounds.width-p.x), height: 90)); boxes.last?.becomeFirstResponder() }
+        if tool == .elements {
+            let points = (0...10).map { i -> CGPoint in let a = CGFloat(i) * .pi / 5 - .pi / 2; let r: CGFloat = i % 2 == 0 ? 35 : 15; return CGPoint(x:p.x+cos(a)*r,y:p.y+sin(a)*r) }; onShape?(points, true)
+        }
+    }
+    @objc private func pan(_ recognizer: UIPanGestureRecognizer) {
+        guard [.geometry, .eraser, .laser].contains(tool) else { return }
+        let location = recognizer.location(in: document)
+        let p = CGPoint(x: min(max(0, location.x), document.bounds.width), y: min(max(0, location.y), document.bounds.height))
+        if recognizer.state == .began { start = p; points = [p]; onInteraction?(true); laser.removeAllAnimations(); laser.opacity = 1 }
+        else { points.append(p) }
+        if tool == .eraser {
+            laser.strokeColor = UIColor.white.withAlphaComponent(0.5).cgColor; laser.lineWidth = 1; laser.fillColor = nil
+            laser.path = UIBezierPath(ovalIn: CGRect(x: p.x - eraserDiameter / 2, y: p.y - eraserDiameter / 2, width: eraserDiameter, height: eraserDiameter)).cgPath
+            if [.began, .changed, .ended].contains(recognizer.state) { onErase?(Array(points.suffix(2))) }
+            if recognizer.state == .ended { onInteraction?(false); laser.path = nil }
+            if recognizer.state == .cancelled || recognizer.state == .failed { onEraseCancelled?(); onInteraction?(false); laser.path = nil }
+            return
+        }
+        let path = UIBezierPath(); path.move(to:start)
+        if tool == .geometry {
+            let outline = shape.points(from: start, to: p, samples: points)
+            path.append(GeometricInk.path(outline)); if shape.isClosed { path.close() }
+            if [.elbow, .curve].contains(shape) { path.append(GeometricInk.path(GeometricInk.arrowhead(outline, width: laser.lineWidth))) }
+        }
+        else if tool == .laser {
+            laser.fillColor = laserTrail ? nil : UIColor.systemRed.cgColor
+            if laserTrail { path.append(GeometricInk.path(points)) }
+            else { path.removeAllPoints(); path.append(UIBezierPath(ovalIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6))) }
+        }
+        else { path.addLine(to:p) }
+        laser.path = path.cgPath
+        if recognizer.state == .ended {
+            if tool == .geometry { onShape?(shape.points(from: start, to: p, samples: points), shape.isClosed) }
+            onInteraction?(false)
+            let animation = CABasicAnimation(keyPath: "opacity"); animation.fromValue = 1; animation.toValue = 0; animation.duration = 0.6; laser.opacity = 0; laser.add(animation,forKey:"fade")
+        }
+        if recognizer.state == .cancelled || recognizer.state == .failed { laser.path = nil; onInteraction?(false) }
+    }
+    private func addText(_ box: TextBox) {
+        let view = UITextView(frame:CGRect(x:box.x,y:box.y,width:max(40,box.width),height:box.height))
+        view.text = box.text; view.font = .systemFont(ofSize:20); view.textColor = UIColor(hex: "#1E1B1B"); view.backgroundColor = .clear; view.delegate = self
+        view.isScrollEnabled = false; view.isUserInteractionEnabled = tool == .text
+        boxes.append(view); document.addSubview(view)
+    }
+    func textViewDidChange(_ textView: UITextView) {
+        guard textWritable else { return }
+        textView.sizeToFit()
+        let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height) }
+        do { try JSONEncoder().encode(saved).write(to:textURL,options:.atomic) }
+        catch { onError?("Text konnte nicht gespeichert werden: \(error.localizedDescription)") }
+    }
+}
+
+enum StrokeFactory {
+    static func stroke(points: [CGPoint], color: UIColor, width: CGFloat) -> PKStroke {
+        let controls = points.enumerated().map { i,p in PKStrokePoint(location:p,timeOffset:Double(i)/120,size:CGSize(width:width,height:width),opacity:1,force:1,azimuth:0,altitude:.pi/2) }
+        return PKStroke(ink: PKInk(.pen,color:color), path:PKStrokePath(controlPoints:controls,creationDate:Date()))
+    }
+}

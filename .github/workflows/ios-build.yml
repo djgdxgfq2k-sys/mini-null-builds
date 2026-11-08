@@ -1,0 +1,121 @@
+# Public build-only repo: builds the NullMini iPad app to an unsigned NullMini.ipa.
+# Source of truth is the private mini-null repo; tools/sync-build-repo.sh publishes snapshots here.
+# The original Goodnotes assets are never published; tools/add-original-assets.ps1 adds them locally.
+name: iOS Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      server_host:
+        description: "Vorbelegte Tailscale-IP des Dell-Servers (in der App änderbar)"
+        required: false
+        default: "192.168.1.100"
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      APP_PATH: ios-app/build/Build/Products/Release-iphoneos/NullMini.app
+      SERVER_HOST: ${{ inputs.server_host || '192.168.1.100' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: XcodeGen installieren
+        run: brew install xcodegen
+
+      - name: Xcode-Version anzeigen
+        run: xcodebuild -version
+
+      - name: Xcode-Projekt erzeugen
+        working-directory: ios-app
+        run: xcodegen generate
+
+      - name: Release-Build für iOS-Geräte (unsigniert)
+        working-directory: ios-app
+        run: |
+          set -o pipefail
+          xc_status=0
+          xcodebuild \
+            -project NullMini.xcodeproj \
+            -scheme NullMini \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            NULLMINI_SERVER_HOST="$SERVER_HOST" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee xcodebuild.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || xc_status=${PIPESTATUS[0]}
+          if [ "$xc_status" -ne 0 ]; then
+            echo "xcodebuild failed with exit code $xc_status" >&2
+            exit "$xc_status"
+          fi
+          test -d "build/Build/Products/Release-iphoneos/NullMini.app"
+
+      - name: IPA packen
+        run: |
+          rm -rf Payload NullMini.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry NullMini.ipa Payload
+          ls -lh NullMini.ipa
+
+      - name: IPA hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: NullMini-ipa
+          path: NullMini.ipa
+          if-no-files-found: error
+
+      # Echter App-Code auf einem iPad-Simulator: Server-Paket entpacken, installieren, Striche prüfen.
+      # Die IPA ist oben schon hochgeladen; ein roter Test macht den Lauf trotzdem rot.
+      - name: Tests auf iPad-Simulator
+        working-directory: ios-app
+        run: |
+          set -o pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k,v in sorted(d.items(), reverse=True) if 'iOS' in k for x in v if 'iPad' in x['name']))")
+          echo "Simulator: $UDID"
+          xcodebuild \
+            -project NullMini.xcodeproj \
+            -scheme NullMini \
+            -destination "id=$UDID" \
+            -derivedDataPath build-tests \
+            -resultBundlePath build-tests/ReferenceChecks.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee xcodebuild-test.log | grep -E "error:|Test Case|Executed|TEST (SUCCEEDED|FAILED)"
+
+      - name: iPad-Ansichten exportieren
+        if: always()
+        working-directory: ios-app
+        run: |
+          if [ -d build-tests/ReferenceChecks.xcresult ]; then
+            xcrun xcresulttool export attachments --path build-tests/ReferenceChecks.xcresult --output-path build-tests/reference-captures
+          fi
+
+      - name: iPad-Ansichten hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipad-reference-captures
+          path: ios-app/build-tests/reference-captures
+          if-no-files-found: ignore
+
+      - name: Build-Log hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: |
+            ios-app/xcodebuild.log
+            ios-app/xcodebuild-test.log
+          if-no-files-found: ignore
