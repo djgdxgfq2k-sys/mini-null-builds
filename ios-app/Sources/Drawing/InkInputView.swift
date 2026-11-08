@@ -39,6 +39,7 @@ final class InkInputView: UIView {
         isOpaque = false; backgroundColor = .clear; isMultipleTouchEnabled = true
         preview.isOpaque = false; preview.backgroundColor = .clear; preview.isUserInteractionEnabled = false; preview.isScrollEnabled = false
         preview.maximumSupportedContentVersion = .latest
+        preview.overrideUserInterfaceStyle = .light; overrideUserInterfaceStyle = .light
         addSubview(preview)
         backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.finishPendingStroke() } }
     }

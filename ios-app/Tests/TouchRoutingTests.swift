@@ -43,7 +43,7 @@ import UIKit
         let store = LibraryStore(root: root)
         let book = try XCTUnwrap(store.items.first(where: { !$0.folder }))
         store.open(book.id)
-        for finger in [false, true] {
+        for (round, finger) in [false, true].enumerated() {
             var settings = ToolSettings(); settings.tool = .pen; settings.finger = finger; settings.width = 4
             ToolSettingsStore.save(settings)
             let host = UIHostingController(rootView: AnyView(EditorView(bookID: book.id).environmentObject(store).preferredColorScheme(.dark)))
@@ -85,14 +85,16 @@ import UIKit
             XCTAssertTrue(claims.isEmpty, "finger=\(finger): drags can be taken away from the ink layer by: \(claims.joined(separator: "; "))")
 
             // Draw through the same entry points touches use, then look at the real screen pixels.
-            let start = ink.convert(point, from: window)
+            let start = ink.convert(CGPoint(x: point.x, y: point.y + CGFloat(round) * 60), from: window)
             let source: UITouch.TouchType = finger ? .direct : .pencil
             ink.beginStroke(InkSample(point: CGPoint(x: start.x - 60, y: start.y), time: 0), source: source)
             ink.addSamples((1...30).map { InkSample(point: CGPoint(x: start.x - 60 + CGFloat($0) * 4, y: start.y), time: Double($0) / 120) })
-            let wet = darkest(host.view, around: point)
+            try await Task.sleep(nanoseconds: 250_000_000)
+            let drawn = CGPoint(x: point.x, y: point.y + CGFloat(round) * 60)
+            let wet = darkest(host.view, around: drawn)
             ink.endStroke()
             try await Task.sleep(nanoseconds: 600_000_000)
-            let dry = darkest(host.view, around: point)
+            let dry = darkest(host.view, around: drawn)
             let format = UIGraphicsImageRendererFormat(); format.scale = 1
             let screen = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
             let shot = XCTAttachment(image: screen); shot.name = "touch-routing-finger-\(finger)-at-\(Int(point.x))x\(Int(point.y))"; shot.lifetime = .keepAlways; add(shot)

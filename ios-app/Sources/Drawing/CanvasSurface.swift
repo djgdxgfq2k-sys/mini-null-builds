@@ -379,6 +379,7 @@ final class PageViewport: UIView, UITextViewDelegate {
         original.frame = document.bounds; original.backgroundColor = .clear; original.isUserInteractionEnabled = false; document.addSubview(original)
         canvas.frame = document.bounds; canvas.backgroundColor = .clear; canvas.isOpaque = false
         canvas.maximumSupportedContentVersion = .latest
+        canvas.overrideUserInterfaceStyle = .light
         canvas.isScrollEnabled = false; canvas.minimumZoomScale = 1; canvas.maximumZoomScale = 1
         document.addSubview(canvas)
         inkInput.frame = document.bounds; inkInput.managedUndo = canvas.undoManager; document.addSubview(inkInput)
