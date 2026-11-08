@@ -20,3 +20,25 @@ struct ToolbarPressStyle: ButtonStyle {
             .animation(.easeOut(duration: configuration.isPressed ? 0.05 : 0.12), value: configuration.isPressed)
     }
 }
+
+/// Writing-tool artwork as the original composes it: an unselected outline, or when selected the
+/// `_selected_body` artwork with the `_selected_color_*` nib layer tinted in the current ink color.
+struct WritingToolIcon: View {
+    let base: String
+    let selected: Bool
+    let color: String
+    let colorLayer: String
+    var size: CGFloat = 36
+    var body: some View {
+        ZStack {
+            if selected && !colorLayer.isEmpty && OriginalAssets.image(base + "_selected_body", in: OriginalAssets.toolbar) != nil {
+                OriginalIcon(name: base + "_selected_body", size: size, original: true)
+                OriginalIcon(name: base + colorLayer, size: size).foregroundStyle(Color(hex: color))
+            } else if selected, OriginalAssets.image(base + "_selected", in: OriginalAssets.toolbar) != nil {
+                OriginalIcon(name: base + "_selected", size: size, original: true)
+            } else {
+                OriginalIcon(name: base, size: size)
+            }
+        }.frame(width: 36, height: 36)
+    }
+}

@@ -178,15 +178,17 @@ import PDFKit
                             }
                     }
                     HStack(spacing: 0) {
-                        if settings.toolbarTools.contains(.lasso) { mainTool(.lasso, name: "newToolbar/lasso/lasso_rectangular"); toolbarDivider }
+                        // Order and artwork of the original iPad toolbar: hand | lasso, pen, eraser, text, objects, image, shapes, sticky note, laser | audio.
+                        mainTool(.hand, name: "newToolbar/selection"); toolbarDivider
+                        if settings.toolbarTools.contains(.lasso) { mainTool(.lasso, name: settings.rectangularLasso ? "newToolbar/lasso/lasso_rectangular" : "newToolbar/lasso/lasso") }
                         if settings.toolbarTools.contains(.pen) { mainTool(.pen, name: "newToolbar/writing_tools/writing_tools") }
                         if settings.toolbarTools.contains(.eraser) { mainTool(.eraser, name: "newToolbar/eraser/eraser_stroke") }
+                        mainTool(.text, name: "newToolbar/text")
+                        mainTool(.elements, name: "newToolbar/element")
+                        toolbarAction("newToolbar/image", "Bilder") { if let page { pageMedia = PageMediaRequest(kind: .photos, anchorID: page.id, position: 1) } }
                         if settings.toolbarTools.contains(.geometry) { mainTool(.geometry, name: "newToolbar/shapes") }
+                        toolbarAction("newToolbar/sticky_note", "Notizzettel") {}.disabled(true)
                         if settings.toolbarTools.contains(.laser) { mainTool(.laser, name: "newToolbar/laser_pointer") }
-                        Button { moreTools.toggle() } label: { Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold)).frame(width: 24, height: 24).background(Color(referenceHex: "#596F95"), in: Circle()).frame(width: 50, height: 44) }
-                            .accessibilityLabel("Weitere Werkzeuge").popover(isPresented: $moreTools, arrowEdge: .top) {
-                                ReferenceToolMenu(title: "Werkzeuge", entries: [("Text", "newToolbar/text"), ("Objekte", "newToolbar/element"), ("Bilder", "newToolbar/image"), ("Notizzettel", "newToolbar/sticky_note")], enabled: [0, 1]) { index in moreTools = false; settings.tool = index == 0 ? .text : .elements }
-                            }
                         toolbarDivider
                         iconButton("mediaAndDevices/microphone-01", "Aufnahmen") { panel = .audio }
                         Button { accessories.toggle() } label: {
@@ -205,13 +207,17 @@ import PDFKit
         }.frame(height: ReferenceLayout.toolbar).background(Theme.toolbar).foregroundStyle(.white)
             .animation(EditorMotion.selection, value: settings.tool)
     }
+    private func toolbarAction(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { OriginalIcon(name: name, size: 24).frame(width: 36, height: 36).frame(width: 50, height: 44) }
+            .buttonStyle(ToolbarPressStyle()).accessibilityLabel(label)
+    }
     private var toolbarDivider: some View { Rectangle().fill(Color(referenceHex: "#5D7297")).frame(width: 0.5, height: 24).padding(.horizontal, 2) }
     private func mainTool(_ tool: EditorTool, name: String) -> some View {
         let selected = settings.tool == tool || (tool == .pen && [.marker, .shapes, .pencil].contains(settings.tool))
         let selectedName = name + "_selected"
         let artwork = selected && OriginalAssets.image(selectedName, in: OriginalAssets.toolbar) != nil ? selectedName : name
         return Button {
-            if selected && tool == .geometry { return }
+            if selected && [.geometry, .hand, .text, .elements].contains(tool) { return }
             if selected { toolPopover = toolPopover == settings.tool ? nil : settings.tool }
             else { toolPopover = nil; settings.tool = tool }
         } label: {
@@ -226,8 +232,8 @@ import PDFKit
                     Button { commands.undo() } label: { OriginalIcon(name: "toolbar/tool_undo", size: 24).frame(width: 44, height: 45).opacity(commands.canUndo ? 1 : 0.5) }.accessibilityLabel("Widerrufen")
                     Button { commands.redo() } label: { OriginalIcon(name: "toolbar/tool_redo", size: 24).frame(width: 44, height: 45).opacity(commands.canRedo ? 1 : 0.5) }.accessibilityLabel("Wiederholen")
                 }.foregroundStyle(.white).frame(width: 89, height: 45).goodnotesPill().padding(.leading, 7.5)
-                if ![.lasso, .laser].contains(settings.tool) && !settings.readOnly {
-                    contextPill.frame(width: min(settings.tool == .geometry ? 459 : (settings.tool == .eraser ? 362 : min(620, 335 + CGFloat(contextColors.count) * 44)), max(260, geometry.size.width - 210)), height: 45)
+                if ![.lasso, .laser, .hand, .text, .elements].contains(settings.tool) && !settings.readOnly {
+                    contextPill.frame(width: min(settings.tool == .geometry ? 459 : (settings.tool == .eraser ? 362 : min(660, 380 + CGFloat(contextColors.count) * 44)), max(260, geometry.size.width - 210)), height: 45)
                         .position(x: max(geometry.size.width / 2, 265), y: 22.5)
                         .transition(.opacity)
                 }
@@ -243,20 +249,15 @@ import PDFKit
             else if settings.tool == .eraser { EraserContextToolbar(settings: $settings, selectType: { toolPopover = .eraser }, clearPage: { handlePageAction(.clear, index: pageIndex) }) }
             else {
             HStack(spacing: 0) {
-                Button { toolPopover = settings.tool } label: {
-                    HStack(spacing: 0) {
-                        if settings.tool == .eraser { OriginalIcon(name: "newToolbar/eraser/eraser_stroke", size: 24); Text("Strich").font(.system(size: 15)).padding(.horizontal, 5) }
-                        else { OriginalIcon(name: penAsset, catalog: OriginalAssets.icons, size: 36) }
-                        Image(systemName: "chevron.down").font(.system(size: 10)).frame(width: 8)
-                    }.frame(width: settings.tool == .eraser ? 116 : 46, height: 36).background(settings.tool == .eraser ? Theme.selectedRow : Color(referenceHex: "#4D8292"), in: RoundedRectangle(cornerRadius: 13.5))
-                }.padding(.leading, 2).accessibilityLabel("Werkzeug-Optionen")
-                if settings.tool != .eraser {
-                    Button { settings.tool = .marker } label: { OriginalIcon(name: "toolbar/tool_highlighter", catalog: OriginalAssets.icons, size: 36).frame(width: 46, height: 45) }.accessibilityLabel("Textmarker")
-                    Button { settings.tool = .shapes } label: { OriginalIcon(name: "newToolbar/pen_shapes", size: 24).frame(width: 46, height: 45) }.accessibilityLabel("Draw Shape")
-                    Button { writingMenu.toggle() } label: { Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold)).frame(width: 24, height: 24).background(Color(hex: "#444647"), in: Circle()).frame(width: 46, height: 45) }
-                        .accessibilityLabel("Schreibwerkzeug").popover(isPresented: $writingMenu) { WritingToolMenu(pencil: { writingMenu = false; settings.tool = .pencil }, customize: { writingMenu = false; customizingToolbar = true }) }
-                    Rectangle().fill(Theme.border).frame(width: 0.5, height: 28).padding(.horizontal, 4)
-                }
+                // Original writing-tool row: pen, pencil, highlighter, tape, shapes. The selected tool shows its
+                // body artwork with the nib layer tinted in the current ink color, plus a chevron for its options.
+                writingSlot(.pen, label: "Stift").padding(.leading, 2)
+                writingSlot(.pencil, label: "Bleistift")
+                writingSlot(.marker, label: "Textmarker")
+                WritingToolIcon(base: "newToolbar/writing_tools/tools/tape", selected: false, color: settings.color, colorLayer: "")
+                    .frame(width: 44, height: 45).opacity(0.45).accessibilityLabel("Klebeband (nicht verfügbar)")
+                writingSlot(.shapes, label: "Draw Shape")
+                Rectangle().fill(Theme.border).frame(width: 0.5, height: 28).padding(.horizontal, 4)
                 ForEach(settings.widthPresets.indices, id: \.self) { index in
                     let width = settings.widthPresets[index]
                     Button { if settings.width == width && settings.tool != .eraser { widthPopover = index }; settings.width = width } label: {
@@ -281,6 +282,33 @@ import PDFKit
             .popover(isPresented: $colorPopover) { InkColorPalette(settings: $settings) }
     }
     private var contextColors: [String] { Theme.inks.contains(settings.color) ? Theme.inks : [settings.color] + Theme.inks }
+    private func writingSlot(_ tool: EditorTool, label: String) -> some View {
+        let selected = settings.tool == tool
+        return Button { if selected { toolPopover = tool } else { toolPopover = nil; settings.tool = tool } } label: {
+            HStack(spacing: 0) {
+                WritingToolIcon(base: writingArtwork(tool), selected: selected, color: settings.color, colorLayer: writingColorLayer(tool), size: tool == .shapes ? 24 : 36)
+                if selected { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 10) }
+            }.frame(width: selected ? 54 : 44, height: 36)
+                .background(selected ? Color(referenceHex: "#4D8292") : .clear, in: RoundedRectangle(cornerRadius: 11))
+                .frame(height: 45)
+        }.accessibilityLabel(label).accessibilityAddTraits(selected ? .isSelected : [])
+    }
+    private func writingArtwork(_ tool: EditorTool) -> String {
+        switch tool {
+        case .pencil: return "newToolbar/writing_tools/tools/pencil"
+        case .marker: return "newToolbar/writing_tools/tools/highlighter"
+        case .shapes: return "newToolbar/pen_shapes"
+        default: return "newToolbar/writing_tools/tools/" + (settings.penStyle == .fountain ? "fountain_pen" : (settings.penStyle == .brush ? "brush_pen" : "ball_pen"))
+        }
+    }
+    private func writingColorLayer(_ tool: EditorTool) -> String {
+        switch tool {
+        case .pencil: return "_selected_color"
+        case .marker: return "_selected_color_" + (settings.straightHighlighter ? "straight" : "freehand")
+        case .shapes: return ""
+        default: return "_selected_color_" + (settings.strokePattern == .dashed ? "dashed" : (settings.strokePattern == .dotted ? "dotted" : "solid"))
+        }
+    }
     private var penAsset: String {
         if settings.tool == .pencil { return "toolbar/tool_hb_pencil" }
         if settings.tool == .marker { return "toolbar/tool_highlighter" }

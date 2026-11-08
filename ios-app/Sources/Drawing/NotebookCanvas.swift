@@ -76,7 +76,10 @@ import PencilKit
                 entry.viewport.updatePage(page)
             }
         }
-        scroll.panGestureRecognizer.minimumNumberOfTouches = settings.readOnly || (settings.pencilConnected && !settings.finger) ? 1 : 2
+        // Hand tool: the Pencil moves the page like a finger and never writes.
+        let hand = settings.tool == .hand
+        scroll.panGestureRecognizer.minimumNumberOfTouches = hand || settings.readOnly || (settings.pencilConnected && !settings.finger) ? 1 : 2
+        scroll.panGestureRecognizer.allowedTouchTypes = ((hand || settings.readOnly) ? [UITouch.TouchType.direct, .indirectPointer, .pencil] : [UITouch.TouchType.direct, .indirectPointer]).map { NSNumber(value: $0.rawValue) }
         if layoutChanged { layoutPages() }
         let index = min(max(selected, 0), max(0, pages.count - 1))
         let requestedID = pages.indices.contains(index) ? pages[index].id : nil

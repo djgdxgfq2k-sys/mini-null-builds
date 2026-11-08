@@ -4,7 +4,7 @@ import PDFKit
 import Combine
 
 enum EditorTool: String, CaseIterable, Codable {
-    case pen, pencil, eraser, marker, shapes, geometry, lasso, elements, text, laser
+    case pen, pencil, eraser, marker, shapes, geometry, lasso, elements, text, laser, hand
     var symbol: String {
         switch self {
         case .pen: return "pencil.tip"
@@ -17,6 +17,7 @@ enum EditorTool: String, CaseIterable, Codable {
         case .elements: return "star.square"
         case .text: return "textformat"
         case .laser: return "laser.burst"
+        case .hand: return "hand.point.up"
         }
     }
     var label: String {
@@ -31,6 +32,7 @@ enum EditorTool: String, CaseIterable, Codable {
         case .elements: return "Elemente"
         case .text: return "Textfeld"
         case .laser: return "Laserpointer"
+        case .hand: return "Hand"
         }
     }
 }
@@ -425,7 +427,7 @@ final class PageViewport: UIView, UITextViewDelegate {
         let overlay = [.geometry,.elements,.text,.laser].contains(tool) || (tool == .eraser && !settings.eraserFilters.allEnabled)
         eraserDiameter = settings.eraserDiameter
         let writing = [.pen, .pencil, .marker, .shapes].contains(tool)
-        canvas.isUserInteractionEnabled = writable && !overlay && !writing && tool != .lasso
+        canvas.isUserInteractionEnabled = writable && !overlay && !writing && tool != .lasso && tool != .hand
         inkInput.configure(settings, writable: writable)
         interaction.isHidden = !overlay || !writable
         let touches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)
