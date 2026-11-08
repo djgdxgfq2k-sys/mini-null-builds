@@ -97,6 +97,7 @@ import PDFKit
     }
 
     func testOriginalWhiteboardBackgroundCanBeCreatedAndReopened() async throws {
+        try XCTSkipIf(OriginalAssets.toolbar == nil, "Original Goodnotes assets are kept on the local PC only")
         for (_, templates) in WhiteboardTemplate.sections {
             for template in templates {
                 for dark in [false, true] { XCTAssertNotNil(template.image(dark: dark), "Missing original preview: \(template.name)") }
