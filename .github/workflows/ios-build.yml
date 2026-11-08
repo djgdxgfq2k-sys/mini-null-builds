@@ -37,7 +37,10 @@ jobs:
 
       - name: Xcode-Projekt erzeugen
         working-directory: ios-app
-        run: xcodegen generate
+        # The original Goodnotes assets are not published; an empty folder keeps the resource reference valid.
+        run: |
+          mkdir -p Resources/OriginalAssets
+          xcodegen generate
 
       - name: Release-Build für iOS-Geräte (unsigniert)
         working-directory: ios-app
