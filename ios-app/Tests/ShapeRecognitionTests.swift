@@ -4,6 +4,8 @@ import UIKit
 @testable import NullMini
 
 @MainActor final class ShapeRecognitionTests: XCTestCase {
+    override func setUp() async throws { try await super.setUp(); InkInputView.acceptsInput = true }
+    override func tearDown() async throws { InkInputView.acceptsInput = false; try await super.tearDown() }
     func testLineEllipsePolygonAndUnrecognizedHandwriting() throws {
         let line = (0...30).map { i in CGPoint(x: CGFloat(i * 5), y: i % 2 == 0 ? 20 : 22) }
         let straight = try XCTUnwrap(ShapeRecognition.recognize(line))

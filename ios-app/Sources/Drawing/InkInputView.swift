@@ -3,6 +3,9 @@ import PencilKit
 
 /// Captures actual and predicted input separately. Only actual samples enter the saved drawing.
 final class InkInputView: UIView {
+    /// Off in the app: writing goes through PencilKit's own drawing recognizer, which handles Apple Pencil,
+    /// compatible styluses and fingers on device. This layer stays for its unit-tested stroke processing.
+    static var acceptsInput = false
     private let preview = PKCanvasView()
     private var settings = ToolSettings()
     private var strokeSettings = ToolSettings()
@@ -48,7 +51,7 @@ final class InkInputView: UIView {
     override func layoutSubviews() { super.layoutSubviews(); preview.frame = bounds }
     func configure(_ value: ToolSettings, writable: Bool) {
         settings = value
-        let enabled = writable && [.pen, .pencil, .marker, .shapes].contains(value.tool)
+        let enabled = Self.acceptsInput && writable && [.pen, .pencil, .marker, .shapes].contains(value.tool)
         isUserInteractionEnabled = enabled; isHidden = !enabled
     }
     func beginStroke(_ sample: InkSample, source: UITouch.TouchType = .pencil) {

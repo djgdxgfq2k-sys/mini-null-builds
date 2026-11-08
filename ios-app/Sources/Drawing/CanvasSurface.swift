@@ -428,7 +428,7 @@ final class PageViewport: UIView, UITextViewDelegate {
         let overlay = [.geometry,.elements,.text,.laser].contains(tool) || (tool == .eraser && !settings.eraserFilters.allEnabled)
         eraserDiameter = settings.eraserDiameter
         let writing = [.pen, .pencil, .marker, .shapes].contains(tool)
-        canvas.isUserInteractionEnabled = writable && !overlay && !writing && tool != .lasso && tool != .hand
+        canvas.isUserInteractionEnabled = writable && !overlay && (!writing || !InkInputView.acceptsInput) && tool != .lasso && tool != .hand
         inkInput.configure(settings, writable: writable)
         interaction.isHidden = !overlay || !writable
         let touches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)

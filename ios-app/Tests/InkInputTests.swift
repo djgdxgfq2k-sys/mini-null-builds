@@ -4,6 +4,8 @@ import UIKit
 @testable import NullMini
 
 @MainActor final class InkInputTests: XCTestCase {
+    override func setUp() async throws { try await super.setUp(); InkInputView.acceptsInput = true }
+    override func tearDown() async throws { InkInputView.acceptsInput = false; try await super.tearDown() }
     private func line(y: CGFloat = 50, force: CGFloat = 0.5) -> [InkSample] {
         (0...40).map { i in InkSample(point: CGPoint(x: CGFloat(10 + i * 5), y: y), time: Double(i) / 120, force: force, altitude: 0.8, azimuth: 0.4) }
     }
