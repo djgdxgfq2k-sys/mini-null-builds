@@ -16,7 +16,7 @@ import UIKit
     }
 
     /// Darkest pixel (r+g+b) in a small box of the rendered window, so 765 means pure white.
-    private func darkest(_ window: UIWindow, around point: CGPoint) -> Int {
+    private func darkest(_ window: UIView, around point: CGPoint) -> Int {
         let box = CGRect(x: point.x - 40, y: point.y - 12, width: 80, height: 24)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         let image = UIGraphicsImageRenderer(size: box.size, format: format).image { context in
@@ -89,12 +89,12 @@ import UIKit
             let source: UITouch.TouchType = finger ? .direct : .pencil
             ink.beginStroke(InkSample(point: CGPoint(x: start.x - 60, y: start.y), time: 0), source: source)
             ink.addSamples((1...30).map { InkSample(point: CGPoint(x: start.x - 60 + CGFloat($0) * 4, y: start.y), time: Double($0) / 120) })
-            let wet = darkest(window, around: point)
+            let wet = darkest(host.view, around: point)
             ink.endStroke()
             try await Task.sleep(nanoseconds: 600_000_000)
-            let dry = darkest(window, around: point)
+            let dry = darkest(host.view, around: point)
             let format = UIGraphicsImageRendererFormat(); format.scale = 1
-            let screen = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let screen = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
             let shot = XCTAttachment(image: screen); shot.name = "touch-routing-finger-\(finger)-at-\(Int(point.x))x\(Int(point.y))"; shot.lifetime = .keepAlways; add(shot)
             let layers = allViews(ink.superview ?? ink).map { "\(type(of: $0)) hidden=\($0.isHidden) alpha=\($0.alpha) frame=\($0.frame.integral)" }.joined(separator: " | ")
             let canvasStrokes = allViews(window).compactMap { $0 as? PageInkCanvas }.map { $0.drawing.strokes.count }
