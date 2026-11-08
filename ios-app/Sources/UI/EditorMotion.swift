@@ -28,7 +28,7 @@ struct WritingToolIcon: View {
     let selected: Bool
     let color: String
     let colorLayer: String
-    var size: CGFloat = 36
+    var size: CGFloat = 24
     var body: some View {
         ZStack {
             if selected && !colorLayer.isEmpty && OriginalAssets.image(base + "_selected_body", in: OriginalAssets.toolbar) != nil {
@@ -39,6 +39,6 @@ struct WritingToolIcon: View {
             } else {
                 OriginalIcon(name: base, size: size)
             }
-        }.frame(width: 36, height: 36)
+        }.frame(width: 32, height: 32)
     }
 }

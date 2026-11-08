@@ -286,7 +286,7 @@ import PDFKit
         let selected = settings.tool == tool
         return Button { if selected { toolPopover = tool } else { toolPopover = nil; settings.tool = tool } } label: {
             HStack(spacing: 0) {
-                WritingToolIcon(base: writingArtwork(tool), selected: selected, color: settings.color, colorLayer: writingColorLayer(tool), size: tool == .shapes ? 24 : 36)
+                WritingToolIcon(base: writingArtwork(tool), selected: selected, color: settings.color, colorLayer: writingColorLayer(tool))
                 if selected { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 10) }
             }.frame(width: selected ? 54 : 44, height: 36)
                 .background(selected ? Color(referenceHex: "#4D8292") : .clear, in: RoundedRectangle(cornerRadius: 11))
