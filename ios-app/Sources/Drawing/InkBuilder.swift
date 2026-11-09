@@ -17,10 +17,11 @@ enum InkBuilder {
     private struct Point {
         var sample: InkSample
         var width: CGFloat
+        var opacity: CGFloat = 1
         func interpolated(to other: Point, fraction t: CGFloat) -> Point {
             let mix: (CGFloat, CGFloat) -> CGFloat = { $0 + ($1 - $0) * t }
             func angle(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + atan2(sin(b - a), cos(b - a)) * t }
-            return Point(sample: InkSample(point: CGPoint(x: mix(sample.point.x, other.sample.point.x), y: mix(sample.point.y, other.sample.point.y)), time: sample.time + (other.sample.time - sample.time) * Double(t), force: mix(sample.force, other.sample.force), altitude: mix(sample.altitude, other.sample.altitude), azimuth: angle(sample.azimuth, other.sample.azimuth), roll: angle(sample.roll, other.sample.roll)), width: mix(width, other.width))
+            return Point(sample: InkSample(point: CGPoint(x: mix(sample.point.x, other.sample.point.x), y: mix(sample.point.y, other.sample.point.y)), time: sample.time + (other.sample.time - sample.time) * Double(t), force: mix(sample.force, other.sample.force), altitude: mix(sample.altitude, other.sample.altitude), azimuth: angle(sample.azimuth, other.sample.azimuth), roll: angle(sample.roll, other.sample.roll)), width: mix(width, other.width), opacity: mix(opacity, other.opacity))
         }
     }
     static func strokes(_ input: [InkSample], settings: ToolSettings, creationDate: Date, seed: UInt32, recognizedShape: RecognizedShape? = nil) -> [PKStroke] {
@@ -56,7 +57,16 @@ enum InkBuilder {
         let total = distances.last ?? 0
         let points = smooth.enumerated().map { index, sample -> Point in
             var width = settings.tool == .marker ? max(12, base * 6) : base
-            if settings.tool == .pencil || ([.pen, .shapes].contains(settings.tool) && settings.penStyle != .ballpoint) {
+            if settings.tool == .pencil {
+                // Graphite: pressure darkens the line and widens it a little; tilting the Pencil
+                // shades with the side of the lead, a much wider and lighter stroke.
+                let force = min(1, max(0, sample.force))
+                let tilt = min(1, max(0, 1 - sample.altitude / (.pi / 2) * 1.35))
+                width *= (0.8 + 0.4 * force) * (1 + tilt * 3)
+                let opacity = (0.35 + 0.65 * pow(force, 0.8)) * (1 - tilt * 0.45)
+                return Point(sample: sample, width: width, opacity: max(0.12, min(1, opacity)))
+            }
+            if [.pen, .shapes].contains(settings.tool) && settings.penStyle != .ballpoint {
                 let minimum: CGFloat = settings.penStyle == .brush && settings.tool != .pencil ? 0.3 : 0.15
                 let sensitivity = minimum + (1 - minimum) * CGFloat(settings.pressure)
                 width *= max(0.08, 1 + sensitivity * (min(1, max(0, sample.force)) * 2 - 1))
@@ -88,7 +98,7 @@ enum InkBuilder {
             var controls = segment.map { point -> PKStrokePoint in
                 let angle = point.sample.azimuth + (settings.barrelRoll ? point.sample.roll : 0)
                 let aspect: CGFloat = [.pen, .shapes].contains(settings.tool) && settings.penStyle == .fountain ? 0.2 + CGFloat(settings.tipRoundness) * 0.8 : 1
-                return PKStrokePoint(location: point.sample.point, timeOffset: max(0, point.sample.time - startTime), size: CGSize(width: point.width, height: point.width * aspect), opacity: 1, force: max(0, point.sample.force), azimuth: angle, altitude: point.sample.altitude)
+                return PKStrokePoint(location: point.sample.point, timeOffset: max(0, point.sample.time - startTime), size: CGSize(width: point.width, height: point.width * aspect), opacity: point.opacity, force: max(0, point.sample.force), azimuth: angle, altitude: point.sample.altitude)
             }
             if controls.count == 1, let point = segment.first {
                 controls.append(PKStrokePoint(location: CGPoint(x: point.sample.point.x + 0.01, y: point.sample.point.y), timeOffset: max(0, point.sample.time - startTime) + 0.001, size: controls[0].size, opacity: 1, force: max(0, point.sample.force), azimuth: controls[0].azimuth, altitude: point.sample.altitude))

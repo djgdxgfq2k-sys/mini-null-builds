@@ -1,12 +1,14 @@
 import UIKit
 import PencilKit
 
-/// Captures actual and predicted input separately. Only actual samples enter the saved drawing.
+/// The Goodnotes stroke engine: builds each pen's stroke from actual and predicted samples and shows
+/// the wet ink. Touches arrive through `InkTouchRecognizer` on the page canvas, the same route PencilKit's
+/// own recognizer uses, so a plain view's touch delivery is never relied on.
 final class InkInputView: UIView {
-    /// Off in the app: writing goes through PencilKit's own drawing recognizer, which handles Apple Pencil,
-    /// compatible styluses and fingers on device. This layer stays for its unit-tested stroke processing.
-    static var acceptsInput = false
     private let preview = PKCanvasView()
+    private(set) var enabled = false
+    /// Wet ink renders at the page's on-screen zoom, like the committed ink.
+    var renderScale: CGFloat = 1 { didSet { if renderScale != oldValue { setNeedsLayout() } } }
     private var settings = ToolSettings()
     private var strokeSettings = ToolSettings()
     private var samples: [InkSample] = []
@@ -48,14 +50,16 @@ final class InkInputView: UIView {
     }
     deinit { if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) } }
     required init?(coder: NSCoder) { nil }
-    override func layoutSubviews() { super.layoutSubviews(); preview.frame = bounds }
+    override func layoutSubviews() { super.layoutSubviews(); preview.layoutSharp(covering: bounds.size, scale: renderScale) }
     func configure(_ value: ToolSettings, writable: Bool) {
         settings = value
-        let enabled = Self.acceptsInput && writable && [.pen, .pencil, .marker, .shapes].contains(value.tool)
-        isUserInteractionEnabled = enabled; isHidden = !enabled
+        enabled = writable && !value.appleInk && [.pen, .pencil, .marker, .shapes].contains(value.tool)
+        if !enabled && active { finishStroke() }
+        // Never hit-tested: touches land on the page canvas, whose recognizer feeds this engine.
+        isUserInteractionEnabled = false; isHidden = !enabled
     }
     func beginStroke(_ sample: InkSample, source: UITouch.TouchType = .pencil) {
-        guard isUserInteractionEnabled, !isHidden else { return }
+        guard enabled else { return }
         if active { finishStroke() }
         completion?.cancel(); awaitingEnd = false; samples = [sample]; strokeSettings = settings
         recognized = nil; recognizedBase = nil; holdPoint = nil
@@ -142,26 +146,32 @@ final class InkInputView: UIView {
         let altitude = touch.type == .pencil && touch.altitudeAngle > 0 ? touch.altitudeAngle : .pi / 2
         return InkSample(point: p, time: touch.timestamp, force: force, altitude: altitude, azimuth: touch.type == .pencil ? touch.azimuthAngle(in: self) : 0, roll: roll, estimateID: touch.estimationUpdateIndex?.intValue, awaitingUpdate: !touch.estimatedPropertiesExpectingUpdates.isEmpty)
     }
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+    /// Returns whether a stroke is now being written with one of these touches.
+    @discardableResult func inputBegan(_ touches: Set<UITouch>, with event: UIEvent?) -> Bool {
+        guard enabled else { return false }
         if let pencil = touches.first(where: { $0.type == .pencil && accepts($0) }), activeTouch?.type != .pencil {
             if active && activeTouch != nil { cancelStroke() }
-            beginStroke(sample(pencil), source: .pencil); activeTouch = pencil; return
+            beginStroke(sample(pencil), source: .pencil); activeTouch = pencil; return true
         }
-        guard activeTouch == nil, let touch = touches.first(where: accepts) else { return }
+        // A second finger means pinch or two-finger scrolling: drop the finger stroke.
+        if let current = activeTouch, current.type == .direct, touches.contains(where: { $0.type == .direct }) { cancelStroke(); return false }
+        guard activeTouch == nil, let touch = touches.first(where: accepts) else { return active }
         beginStroke(sample(touch), source: touch.type); activeTouch = touch
+        return true
     }
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+    func inputMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = activeTouch, touches.contains(touch) else { return }
         addSamples((event?.coalescedTouches(for: touch) ?? [touch]).map(sample), predicted: (event?.predictedTouches(for: touch) ?? []).map(sample))
     }
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    func inputEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = activeTouch, touches.contains(touch) else { return }
         addSamples((event?.coalescedTouches(for: touch) ?? [touch]).map(sample)); endStroke()
     }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+    func inputCancelled(_ touches: Set<UITouch>) {
         guard let touch = activeTouch, touches.contains(touch) else { return }; interruptStroke(source: touch.type)
     }
-    override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) { for touch in touches { updateEstimate(sample(touch)) } }
+    func inputEstimatesUpdated(_ touches: Set<UITouch>) { for touch in touches { updateEstimate(sample(touch)) } }
+    var isTracking: Bool { activeTouch != nil }
     private func suspendScrolling() {
         restoreScrolling()
         var ancestor = superview
@@ -176,5 +186,57 @@ final class InkInputView: UIView {
     private func restoreScrolling() {
         for state in suspendedScrolling { state.scroll?.panGestureRecognizer.isEnabled = state.pan; state.scroll?.pinchGestureRecognizer?.isEnabled = state.pinch }
         suspendedScrolling.removeAll()
+    }
+}
+
+/// Hands the page canvas's touches to the stroke engine. It sits on the canvas next to PencilKit's
+/// drawing recognizer, recognizes alongside everything else and never cancels or delays touches,
+/// so the Pencil, passive styluses and fingers reach the engine exactly as they reach PencilKit.
+final class InkTouchRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    weak var ink: InkInputView?
+    init(ink: InkInputView) {
+        self.ink = ink
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false; delaysTouchesBegan = false; delaysTouchesEnded = false
+        delegate = self
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let ink, ink.enabled else { state = .failed; return }
+        if ink.inputBegan(touches, with: event) { if state == .possible { state = .began } }
+        else if !ink.isTracking { state = state == .possible ? .failed : .cancelled }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let ink else { return }
+        ink.inputMoved(touches, with: event)
+        if state == .began || state == .changed { state = .changed }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let ink else { return }
+        ink.inputEnded(touches, with: event)
+        if !ink.isTracking { state = state == .possible ? .failed : .ended }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        ink?.inputCancelled(touches)
+        state = state == .possible ? .failed : .cancelled
+    }
+    override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) { ink?.inputEstimatesUpdated(touches) }
+}
+
+extension PKCanvasView {
+    /// Lays the canvas out `scale` times larger, zoomed by the same factor and shrunk back by a transform:
+    /// it covers exactly `size` in its superview, but PencilKit renders at the zoomed resolution.
+    func layoutSharp(covering size: CGSize, scale z: CGFloat) {
+        guard size.width > 0, size.height > 0, z > 0 else { return }
+        transform = .identity
+        maximumZoomScale = max(z, maximumZoomScale)
+        minimumZoomScale = z; maximumZoomScale = z
+        bounds = CGRect(origin: .zero, size: CGSize(width: size.width * z, height: size.height * z))
+        zoomScale = z
+        contentSize = CGSize(width: size.width * z, height: size.height * z)
+        contentOffset = .zero
+        center = CGPoint(x: size.width / 2, y: size.height / 2)
+        transform = CGAffineTransform(scaleX: 1 / z, y: 1 / z)
+        pinchGestureRecognizer?.isEnabled = false
     }
 }

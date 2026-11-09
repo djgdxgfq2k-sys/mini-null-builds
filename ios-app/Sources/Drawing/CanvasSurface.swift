@@ -66,6 +66,8 @@ struct ToolSettings: Equatable, Codable {
     var eraserSize = 0
     var eraserFilters = EraserFilters()
     var eraserAutoDeselect = false
+    /// Emergency fallback: write with Apple's plain PencilKit pens instead of the Goodnotes stroke engine.
+    var appleInk = false
     var eraserDiameter: CGFloat { [8, 16, 64][min(2, max(0, eraserSize))] }
     var pressure = 0.5
     var sharpness = 0.5
@@ -171,7 +173,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 guard let self else { return }
                 if active {
                     self.inputGeneration += 1; self.usingTool = true; self.cancelledInput = false; self.commands?.target = self; self.onActivate?()
-                    if self.currentSettings?.tool == .eraser && self.currentSettings?.eraserFilters.allEnabled == false { self.filteredEraseBefore = self.drawing; self.filteredEraseChanged = false }
+                    if let settings = self.currentSettings, settings.tool == .eraser, FilteredEraser.needsOverlay(settings) { self.filteredEraseBefore = self.drawing; self.filteredEraseChanged = false }
                 } else { self.finishFilteredErase(); self.finishToolUse() }
             }
             view.inkInput.onInteraction = view.onInteraction
@@ -230,7 +232,9 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             if usingTool { queued.append { [weak self] in self?.applyTool() }; return }
             let scale = viewport?.renderScale ?? 1
             switch settings.tool {
-            case .eraser: canvas.tool = settings.eraserStyle == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: settings.eraserDiameter * scale)
+            case .eraser:
+                // Precision erases exactly the circle at its set size, whatever the pressure.
+                canvas.tool = settings.eraserStyle == .precision ? PKEraserTool(.fixedWidthBitmap, width: settings.eraserDiameter * scale) : PKEraserTool(.vector)
             case .lasso: canvas.tool = PKLassoTool()
             case .marker: canvas.tool = PKInkingTool(.marker, color: UIColor(hex: settings.color).withAlphaComponent(0.35), width: max(12, settings.width * 6) * scale)
             case .pencil: canvas.tool = PKInkingTool(.pencil, color: UIColor(hex: settings.color), width: settings.width * scale)
@@ -243,7 +247,16 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
             drawing = canvasView.drawing
-            if filteredEraseBefore == nil { persist() }; commands?.refreshUndo()
+            // While a tool is in use PencilKit reports every small change; writing the whole page to disk
+            // each time made erasing stutter. Save once the tool lifts, or shortly after a burst of changes.
+            if filteredEraseBefore == nil { if usingTool { schedulePersist() } else { persist() } }
+            commands?.refreshUndo()
+        }
+        private var pendingPersist: DispatchWorkItem?
+        private func schedulePersist() {
+            pendingPersist?.cancel()
+            let task = DispatchWorkItem { [weak self] in self?.persist() }
+            pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             drawing = canvasView.drawing; persist()
@@ -263,6 +276,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             }
         }
         @discardableResult func persist() -> Bool {
+            pendingPersist?.cancel(); pendingPersist = nil
             guard writable else { return true }
             do { try DrawingDisk.save(drawing, directory: directory, page: page.id); return true }
             catch { commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)"); return false }
@@ -404,6 +418,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     private var tool = EditorTool.pen
     private var shape = GeometricShape.ellipse
     private var panInput: UIPanGestureRecognizer?
+    private var eraseInput: UILongPressGestureRecognizer?
+    private lazy var inkTouches = InkTouchRecognizer(ink: inkInput)
     private var tapInput: UITapGestureRecognizer?
     private var points: [CGPoint] = []
     var laserTrail = true
@@ -437,7 +453,12 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         inkInput.frame = document.bounds; inkInput.managedUndo = canvas.undoManager; document.addSubview(inkInput)
         interaction.frame = document.bounds; interaction.backgroundColor = .clear; interaction.isHidden = true; document.addSubview(interaction)
         lasso.frame = document.bounds; lasso.isHidden = true; document.addSubview(lasso)
-        scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = 4; scroll.contentSize = content.bounds.size
+        scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = PageViewport.maximumZoom; scroll.contentSize = content.bounds.size
+        canvas.addGestureRecognizer(inkTouches)
+        let eraseTouch = UILongPressGestureRecognizer(target: self, action: #selector(erase(_:)))
+        // Starts on first contact, unlike a pan, so erasing reacts without a movement threshold.
+        eraseTouch.minimumPressDuration = 0; eraseTouch.allowableMovement = .greatestFiniteMagnitude
+        eraseInput = eraseTouch; interaction.addGestureRecognizer(eraseTouch)
         scroll.delegate = self
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
         scroll.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
@@ -466,13 +487,15 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { scrollView === scroll ? content : nil }
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerPage() }
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { updateRenderScale() }
+    /// Deepest zoom, relative to the page's own size; pages also render sharp up to here.
+    static let maximumZoom: CGFloat = 10
     /// Zoom of the notebook scroll view that holds this page (1 when the page zooms by itself).
     var outerZoom: CGFloat = 1 { didSet { updateRenderScale() } }
     /// Scale PencilKit renders the ink at, matching the on-screen zoom so strokes stay pixel-sharp.
     private(set) var renderScale: CGFloat = 1
     func updateRenderScale() {
         // Quarter steps keep PencilKit from re-rendering on every tiny zoom change.
-        let target = min(8, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        let target = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
         guard target != renderScale else { return }
         renderScale = target; layoutCanvas(); onRenderScale?()
     }
@@ -480,18 +503,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     /// The canvas is laid out `renderScale` times larger, zoomed by the same factor and shrunk back
     /// by a transform: it covers exactly the page, but PencilKit draws at the zoomed resolution.
     private func layoutCanvas() {
-        let size = document.bounds.size, z = renderScale
-        guard size.width > 0, size.height > 0 else { return }
-        canvas.transform = .identity
-        canvas.maximumZoomScale = max(z, canvas.maximumZoomScale)
-        canvas.minimumZoomScale = z; canvas.maximumZoomScale = z
-        canvas.bounds = CGRect(origin: .zero, size: CGSize(width: size.width * z, height: size.height * z))
-        canvas.zoomScale = z
-        canvas.contentSize = CGSize(width: size.width * z, height: size.height * z)
-        canvas.contentOffset = .zero
-        canvas.center = CGPoint(x: size.width / 2, y: size.height / 2)
-        canvas.transform = CGAffineTransform(scaleX: 1 / z, y: 1 / z)
-        canvas.pinchGestureRecognizer?.isEnabled = false
+        canvas.layoutSharp(covering: document.bounds.size, scale: renderScale)
+        inkInput.renderScale = renderScale
     }
     override func layoutSubviews() {
         super.layoutSubviews(); scroll.frame = bounds
@@ -509,14 +522,20 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     func setTool(_ settings: ToolSettings, writable: Bool) {
         let tool = settings.tool; self.tool = tool; shape = settings.geometricShape
         laserTrail = settings.laserTrail
-        let overlay = [.geometry,.elements,.text,.laser].contains(tool) || (tool == .eraser && !settings.eraserFilters.allEnabled)
+        // PencilKit has no Goodnotes-style standard eraser, so it and filtered erasing run on the overlay.
+        let overlay = [.geometry,.elements,.text,.laser].contains(tool) || (tool == .eraser && FilteredEraser.needsOverlay(settings))
         eraserDiameter = settings.eraserDiameter
-        let writing = [.pen, .pencil, .marker, .shapes].contains(tool)
-        canvas.isUserInteractionEnabled = writable && !overlay && (!writing || !InkInputView.acceptsInput) && tool != .lasso && tool != .hand
+        canvas.isUserInteractionEnabled = writable && !overlay && tool != .lasso && tool != .hand
         inkInput.configure(settings, writable: writable)
+        // The stroke engine writes; PencilKit's own recognizer only writes in the Apple-pen fallback or erases.
+        let engine = inkInput.enabled
+        inkTouches.isEnabled = engine
+        canvas.drawingGestureRecognizer.isEnabled = !engine
         interaction.isHidden = !overlay || !writable
         let touches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)
         panInput?.allowedTouchTypes = touches.map { NSNumber(value: $0.rawValue) }
+        eraseInput?.allowedTouchTypes = touches.map { NSNumber(value: $0.rawValue) }
+        eraseInput?.isEnabled = tool == .eraser
         let lassoActive = tool == .lasso && writable
         if !lassoActive && !lasso.isHidden { lasso.clearSelection(animated: false) }
         lasso.isHidden = !lassoActive; lasso.rectangular = settings.rectangularLasso; lasso.setAllowedTouches(touches)
@@ -530,7 +549,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     }
     @objc private func tap(_ recognizer: UITapGestureRecognizer) {
         let p = recognizer.location(in: document)
-        if tool == .eraser { onInteraction?(true); onErase?([p]); onInteraction?(false); return }
+        if tool == .eraser { return } // The erase recognizer already handled the contact.
         if tool == .laser {
             laser.removeAllAnimations(); laser.fillColor = UIColor.systemRed.cgColor
             laser.path = UIBezierPath(ovalIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)).cgPath
@@ -542,20 +561,32 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
             let points = (0...10).map { i -> CGPoint in let a = CGFloat(i) * .pi / 5 - .pi / 2; let r: CGFloat = i % 2 == 0 ? 35 : 15; return CGPoint(x:p.x+cos(a)*r,y:p.y+sin(a)*r) }; onShape?(points, true)
         }
     }
+    @objc private func erase(_ recognizer: UILongPressGestureRecognizer) {
+        guard tool == .eraser else { return }
+        let location = recognizer.location(in: document)
+        let p = CGPoint(x: min(max(0, location.x), document.bounds.width), y: min(max(0, location.y), document.bounds.height))
+        switch recognizer.state {
+        case .began:
+            points = [p]; onInteraction?(true); laser.removeAllAnimations(); laser.opacity = 1
+        case .changed, .ended:
+            // Skip sub-point jitter; each call erases along the segment since the last point.
+            if let last = points.last, hypot(last.x - p.x, last.y - p.y) < 0.75, recognizer.state == .changed { return }
+            points.append(p)
+        default: break
+        }
+        laser.strokeColor = UIColor(white: 0.45, alpha: 0.9).cgColor; laser.lineWidth = 1 / max(0.1, outerZoom * scroll.zoomScale)
+        laser.fillColor = UIColor(white: 1, alpha: 0.35).cgColor
+        laser.path = UIBezierPath(ovalIn: CGRect(x: p.x - eraserDiameter / 2, y: p.y - eraserDiameter / 2, width: eraserDiameter, height: eraserDiameter)).cgPath
+        if [.began, .changed, .ended].contains(recognizer.state) { onErase?(Array(points.suffix(2))) }
+        if recognizer.state == .ended { onInteraction?(false); laser.path = nil; points.removeAll() }
+        if recognizer.state == .cancelled || recognizer.state == .failed { onEraseCancelled?(); onInteraction?(false); laser.path = nil; points.removeAll() }
+    }
     @objc private func pan(_ recognizer: UIPanGestureRecognizer) {
-        guard [.geometry, .eraser, .laser].contains(tool) else { return }
+        guard [.geometry, .laser].contains(tool) else { return }
         let location = recognizer.location(in: document)
         let p = CGPoint(x: min(max(0, location.x), document.bounds.width), y: min(max(0, location.y), document.bounds.height))
         if recognizer.state == .began { start = p; points = [p]; onInteraction?(true); laser.removeAllAnimations(); laser.opacity = 1 }
         else { points.append(p) }
-        if tool == .eraser {
-            laser.strokeColor = UIColor.white.withAlphaComponent(0.5).cgColor; laser.lineWidth = 1; laser.fillColor = nil
-            laser.path = UIBezierPath(ovalIn: CGRect(x: p.x - eraserDiameter / 2, y: p.y - eraserDiameter / 2, width: eraserDiameter, height: eraserDiameter)).cgPath
-            if [.began, .changed, .ended].contains(recognizer.state) { onErase?(Array(points.suffix(2))) }
-            if recognizer.state == .ended { onInteraction?(false); laser.path = nil }
-            if recognizer.state == .cancelled || recognizer.state == .failed { onEraseCancelled?(); onInteraction?(false); laser.path = nil }
-            return
-        }
         let path = UIBezierPath(); path.move(to:start)
         if tool == .geometry {
             let outline = shape.points(from: start, to: p, samples: points)

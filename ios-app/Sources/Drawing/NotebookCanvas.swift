@@ -47,7 +47,7 @@ import PencilKit
         super.init(frame: .zero)
         backgroundColor = UIColor(hex: "#1B1C1C")
         addSubview(scroll); scroll.addSubview(stack)
-        scroll.delegate = self; scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = 4
+        scroll.delegate = self; scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = PageViewport.maximumZoom
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
         scroll.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         scroll.alwaysBounceVertical = true; scroll.showsHorizontalScrollIndicator = false

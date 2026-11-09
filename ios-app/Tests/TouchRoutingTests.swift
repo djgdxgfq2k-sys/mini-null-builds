@@ -78,14 +78,16 @@ import PencilKit
             let canvases = allViews(window).compactMap { $0 as? PageInkCanvas }.filter { $0.window != nil && !$0.isHidden }
             let canvas = try XCTUnwrap(canvases.first, "finger=\(finger): no visible page canvas in the editor")
             XCTAssertTrue(canvas.isUserInteractionEnabled, "finger=\(finger): page canvas does not accept input")
-            XCTAssertTrue(canvas.drawingGestureRecognizer.isEnabled, "finger=\(finger): PencilKit drawing recognizer is disabled")
-            XCTAssertTrue(canvas.tool is PKInkingTool, "finger=\(finger): canvas tool is \(type(of: canvas.tool)), not an inking tool")
-            let types = canvas.drawingGestureRecognizer.allowedTouchTypes.map { $0.intValue }
-            XCTAssertTrue(types.contains(UITouch.TouchType.pencil.rawValue), "finger=\(finger): Pencil is not allowed to draw: \(types)")
-            if finger {
-                XCTAssertTrue(types.contains(UITouch.TouchType.direct.rawValue), "finger mode: fingers and passive styluses are not allowed to draw: \(types)")
-                XCTAssertEqual(canvas.drawingPolicy, .anyInput)
-            }
+            // The Goodnotes stroke engine gets the canvas's touches through its recognizer; PencilKit must not also draw.
+            let recognizer = try XCTUnwrap(canvas.gestureRecognizers?.compactMap { $0 as? InkTouchRecognizer }.first, "finger=\(finger): stroke engine is not attached to the page canvas")
+            XCTAssertTrue(recognizer.isEnabled, "finger=\(finger): stroke engine recognizer is disabled")
+            XCTAssertFalse(recognizer.cancelsTouchesInView); XCTAssertFalse(recognizer.delaysTouchesBegan)
+            XCTAssertTrue(recognizer.delegate?.gestureRecognizer?(recognizer, shouldRecognizeSimultaneouslyWith: canvas.drawingGestureRecognizer) ?? false)
+            XCTAssertTrue(try XCTUnwrap(recognizer.ink).enabled, "finger=\(finger): stroke engine is off for the pen")
+            XCTAssertFalse(canvas.drawingGestureRecognizer.isEnabled, "finger=\(finger): PencilKit would draw a second stroke")
+            let types = StylusInputPolicy.drawingTouches(finger: finger, pencilConnected: false)
+            XCTAssertTrue(types.contains(.pencil), "finger=\(finger): Pencil is not allowed to draw")
+            if finger { XCTAssertTrue(types.contains(.direct), "finger mode: fingers and passive styluses are not allowed to draw") }
             // Zoom in like a pinch would: the ink must re-render at that zoom, not be scaled up.
             let notebook = try XCTUnwrap(allViews(window).compactMap { $0 as? NotebookViewport }.first)
             notebook.scroll.setZoomScale(2.5, animated: false)

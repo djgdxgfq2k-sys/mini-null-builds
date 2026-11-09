@@ -85,6 +85,30 @@ import UIKit
         }
         return Data(bytes)
     }
+    func testStandardEraserCutsTheTouchedPieceAcrossTheWholeWidth() throws {
+        let line = StrokeFactory.stroke(points: (0...70).map { CGPoint(x: 20 + CGFloat($0) * 2, y: 50) }, color: .black, width: 4)
+        let erased = try XCTUnwrap(FilteredEraser.erase(PKDrawing(strokes: [line]), points: [CGPoint(x: 90, y: 20), CGPoint(x: 90, y: 80)], diameter: 16, style: .standard, filters: EraserFilters()))
+        XCTAssertEqual(erased.strokes.count, 2, "A cut through the middle leaves the two ends")
+        for piece in erased.strokes {
+            XCTAssertNil(piece.mask, "Standard erasing cuts the path instead of masking it")
+            for point in piece.path.interpolatedPoints(by: .distance(1)) { XCTAssertGreaterThan(abs(point.location.x - 90), 8, "ink left under the eraser") }
+        }
+        let xs = erased.strokes.flatMap { $0.path.map(\.location.x) }
+        XCTAssertLessThan(xs.min() ?? 99, 22); XCTAssertGreaterThan(xs.max() ?? 0, 158)
+        // Touching only the very end removes it without leaving a speck behind.
+        let tip = try XCTUnwrap(FilteredEraser.erase(PKDrawing(strokes: [line]), points: [CGPoint(x: 168, y: 50)], diameter: 16, style: .standard, filters: EraserFilters()))
+        XCTAssertEqual(tip.strokes.count, 1)
+        XCTAssertLessThan(tip.strokes[0].path.map(\.location.x).max() ?? 999, 158.5)
+        // Untouched strokes are kept as they are.
+        XCTAssertNil(FilteredEraser.erase(PKDrawing(strokes: [line]), points: [CGPoint(x: 90, y: 120)], diameter: 16, style: .standard, filters: EraserFilters()))
+    }
+    func testStandardAndFilteredErasingUseTheOverlay() {
+        var settings = ToolSettings(); settings.tool = .eraser
+        settings.eraserStyle = .stroke; XCTAssertFalse(FilteredEraser.needsOverlay(settings))
+        settings.eraserStyle = .precision; XCTAssertFalse(FilteredEraser.needsOverlay(settings))
+        settings.eraserStyle = .standard; XCTAssertTrue(FilteredEraser.needsOverlay(settings))
+        settings.eraserStyle = .stroke; settings.eraserFilters.marker = false; XCTAssertTrue(FilteredEraser.needsOverlay(settings))
+    }
     func testBitmapFilterUsesPretransformMasksAndKeepsRandomSeed() throws {
         let base = stroke(.pen, y: 30, color: .red)
         let transform = CGAffineTransform(translationX: 20, y: 30)

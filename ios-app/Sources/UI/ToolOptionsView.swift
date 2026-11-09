@@ -184,6 +184,8 @@ import SwiftUI
             Toggle("Zeichnen und halten", isOn: $settings.drawAndHold)
             Toggle("Finger und passive Stifte", isOn: $settings.finger)
             Picker("Drucksensor", selection: $settings.pressureMode) { ForEach(StylusPressureMode.allCases, id: \.self) { mode in Text(mode.rawValue).tag(mode) } }
+            Toggle("Einfache Apple-Stifte (Notfall)", isOn: $settings.appleInk)
+            Text("Nur einschalten, falls der Stift nicht schreibt. Dann fehlen Stiftarten, Druck und Glättung.").font(.system(size: 11)).foregroundStyle(Theme.secondary)
         }.padding(20).frame(width: 320).background(Theme.popover).presentationBackground(Theme.popover)
     }
     private func sectionTitle(_ title: String) -> some View { Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.secondary).frame(maxWidth: .infinity, alignment: .leading).frame(height: 18).padding(.horizontal, 31) }
