@@ -299,13 +299,19 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             for stroke in added {
                 let points = Array(stroke.path)
                 guard !points.isEmpty else { continue }
-                let maxForce = points.map(\.force).max() ?? 0
-                let flat = points.allSatisfy { abs($0.force - points[0].force) < 0.0001 }
-                var samples = points.map { p in
-                    InkSample(point: p.location.applying(stroke.transform), time: p.timeOffset,
-                              force: flat ? 0.5 : min(1, max(0, maxForce > 1 ? p.force / 4.1667 : p.force)),
-                              altitude: p.altitude > 0 ? p.altitude : .pi / 2, azimuth: p.azimuth)
+                // Passive and USB-C styluses can leave force, tilt or angle undefined; any value that is not a
+                // number would make the engine drop every sample, so it falls back to a neutral one.
+                func finite(_ v: CGFloat, _ fallback: CGFloat) -> CGFloat { v.isFinite ? v : fallback }
+                let forces = points.map { finite($0.force, 0) }
+                let maxForce = forces.max() ?? 0
+                let flat = forces.allSatisfy { abs($0 - forces[0]) < 0.0001 }
+                var samples = points.enumerated().map { i, p in
+                    InkSample(point: p.location.applying(stroke.transform), time: finite(p.timeOffset, TimeInterval(i) / 120),
+                              force: flat ? 0.5 : min(1, max(0, maxForce > 1 ? forces[i] / 4.1667 : forces[i])),
+                              altitude: finite(p.altitude, .pi / 2) > 0 ? finite(p.altitude, .pi / 2) : .pi / 2, azimuth: finite(p.azimuth, 0))
                 }
+                samples = samples.filter { $0.point.x.isFinite && $0.point.y.isFinite }
+                guard !samples.isEmpty else { continue }
                 if samples.count == 1 { samples.append(samples[0]) }
                 // Draw-and-hold: the Pencil rested at the end of the stroke. PencilKit records no points while
                 // the Pencil stands still, so the rest is the gap between the last point and the lift.
@@ -321,6 +327,8 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 }
                 rebuilt += InkBuilder.strokes(samples, settings: settings, creationDate: stroke.path.creationDate, seed: stroke.randomSeed, recognizedShape: shape)
             }
+            // Nothing to show instead: keep what PencilKit wrote rather than lose the stroke.
+            guard !rebuilt.isEmpty else { return }
             // Take PencilKit's own undo step back so one undo removes the whole stroke.
             if canvas.undoManager?.canUndo == true {
                 canvas.undoManager?.undo()
@@ -330,6 +338,10 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             if canvas.drawing.strokes.count != start.strokes.count { canvas.drawing = start }
             drawing = start
             viewport?.inkInput.onCommit?(rebuilt)
+            // If the rebuilt strokes did not land, put PencilKit's stroke back instead of losing it.
+            if drawing.strokes.count <= start.strokes.count, !(rebuilt.count == 1 && TapeInk.isProbe(rebuilt[0])) {
+                drawing = now; canvas.drawing = now; viewport?.inkDetail.update(now); persist()
+            }
         }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
