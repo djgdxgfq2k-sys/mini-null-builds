@@ -226,9 +226,9 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         /// PencilKit sizes ink relative to the canvas's own zoom. The canvas zooms only to render sharply,
         /// so widths are multiplied by that zoom to keep strokes as thick on the page as the user chose.
         func applyTool() {
-            guard let canvas else { return }
+            guard let canvas, let settings = currentSettings else { return }
             if usingTool { queued.append { [weak self] in self?.applyTool() }; return }
-            let settings = currentSettings, scale = viewport?.renderScale ?? 1
+            let scale = viewport?.renderScale ?? 1
             switch settings.tool {
             case .eraser: canvas.tool = settings.eraserStyle == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: settings.eraserDiameter * scale)
             case .lasso: canvas.tool = PKLassoTool()
