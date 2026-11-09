@@ -157,10 +157,11 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             viewport = view; canvas = view.canvas
             // Only initialization assigns persisted state; the delegate is installed afterwards.
             view.canvas.drawing = drawing
-            view.canvas.delegate = self; view.scroll.delegate = self
+            view.canvas.delegate = self
             view.canvas.isUserInteractionEnabled = writable
             commands?.target = self
             view.onError = { [weak self] in self?.commands?.reportError($0) }
+            view.onRenderScale = { [weak self] in self?.applyTool() }
             if let error = view.textReadError { commands?.reportError(error) }
             view.onShape = { [weak self] points, closed in
                 guard let self, let settings = self.currentSettings else { return }
@@ -215,20 +216,28 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             // Do not swap a live Pencil tool during a stroke.
             if usingTool { queued.append { [weak self] in self?.configure(settings) }; return }
             currentSettings = settings
-            switch settings.tool {
-            case .eraser: canvas.tool = settings.eraserStyle == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: settings.eraserDiameter)
-            case .lasso: canvas.tool = PKLassoTool()
-            case .marker: canvas.tool = PKInkingTool(.marker, color: UIColor(hex: settings.color).withAlphaComponent(0.35), width: max(12,settings.width * 6))
-            case .pencil: canvas.tool = PKInkingTool(.pencil, color: UIColor(hex: settings.color), width: settings.width)
-            default:
-                let ink: PKInkingTool.InkType = settings.penStyle == .fountain ? .fountainPen : .pen
-                canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width)
-            }
+            applyTool()
             canvas.drawingPolicy = settings.finger || !settings.pencilConnected ? .anyInput : .pencilOnly
             let drawingTouches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)
             canvas.drawingGestureRecognizer.allowedTouchTypes = drawingTouches.map { NSNumber(value: $0.rawValue) }
             viewport?.setTool(settings, writable: writable && !settings.readOnly)
             viewport?.scroll.panGestureRecognizer.minimumNumberOfTouches = settings.readOnly || (settings.pencilConnected && !settings.finger) ? 1 : 2
+        }
+        /// PencilKit sizes ink relative to the canvas's own zoom. The canvas zooms only to render sharply,
+        /// so widths are multiplied by that zoom to keep strokes as thick on the page as the user chose.
+        func applyTool() {
+            guard let canvas else { return }
+            if usingTool { queued.append { [weak self] in self?.applyTool() }; return }
+            let settings = currentSettings, scale = viewport?.renderScale ?? 1
+            switch settings.tool {
+            case .eraser: canvas.tool = settings.eraserStyle == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: settings.eraserDiameter * scale)
+            case .lasso: canvas.tool = PKLassoTool()
+            case .marker: canvas.tool = PKInkingTool(.marker, color: UIColor(hex: settings.color).withAlphaComponent(0.35), width: max(12, settings.width * 6) * scale)
+            case .pencil: canvas.tool = PKInkingTool(.pencil, color: UIColor(hex: settings.color), width: settings.width * scale)
+            default:
+                let ink: PKInkingTool.InkType = settings.penStyle == .fountain ? .fountainPen : .pen
+                canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width * scale)
+            }
         }
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; commands?.target = self; onActivate?() }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -279,23 +288,66 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             if filteredEraseChanged, let before = filteredEraseBefore, let canvas { registerUndo(before, canvas: canvas); persist() }
             filteredEraseBefore = nil; filteredEraseChanged = false
         }
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? { viewport?.content }
-        func scrollViewDidZoom(_ scrollView: UIScrollView) { viewport?.centerPage() }
+    }
+}
+
+/// Tiled layer that redraws only the visible part of a page at the zoom it is shown at,
+/// so paper, PDFs and imported ink stay pixel-sharp instead of being scaled up.
+final class SharpTiledLayer: CATiledLayer {
+    override class func fadeDuration() -> CFTimeInterval { 0 }
+}
+
+/// Sharp overlay for a page layer. The owner keeps drawing a normal, always-ready base image
+/// underneath, so a tile that is still rendering never shows as an empty area, only as briefly softer.
+final class SharpDetailView: UIView {
+    override class var layerClass: AnyClass { SharpTiledLayer.self }
+    private let paint: (CGContext, CGRect) -> Void
+    init(paint: @escaping (CGContext, CGRect) -> Void) {
+        self.paint = paint
+        super.init(frame: .zero)
+        backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false
+        autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if let tiled = layer as? CATiledLayer {
+            // Detail from 1x up to 16x the page size: iPad screens are 2x and the notebook zooms up to ~8x.
+            tiled.levelsOfDetail = 5; tiled.levelsOfDetailBias = 4
+            tiled.tileSize = CGSize(width: 512, height: 512)
+        }
+    }
+    required init?(coder: NSCoder) { nil }
+    /// Tiles render on background threads. Owners change what `paint` reads only inside `locked`,
+    /// and every draw runs inside it too, so PDF pages are never drawn from two threads at once.
+    private let lock = NSLock()
+    func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
+    override func draw(_ rect: CGRect) {
+        guard let c = UIGraphicsGetCurrentContext() else { return }
+        let size = bounds
+        locked { paint(c, size) }
     }
 }
 
 final class PaperView: UIView {
-    var page: NotebookPage
+    var page: NotebookPage { didSet { let page = page; detail.locked { tilePage = page }; detail.setNeedsDisplay() } }
+    private var tilePage: NotebookPage
     let pdf: PDFDocument?
+    private lazy var detail = SharpDetailView { [weak self] c, bounds in
+        guard let self else { return }
+        self.render(c, bounds: bounds, page: self.tilePage)
+    }
     init(page: NotebookPage, directory: URL) {
-        self.page = page
+        self.page = page; tilePage = page
         pdf = page.pdf.flatMap { PDFDocument(url: directory.appendingPathComponent($0)) }
         super.init(frame: CGRect(origin: .zero, size: page.nativeSize)); backgroundColor = .white
         contentMode = .redraw
+        detail.frame = bounds; addSubview(detail)
     }
+    override func setNeedsDisplay() { super.setNeedsDisplay(); detail.setNeedsDisplay() }
     required init?(coder: NSCoder) { nil }
     override func draw(_ rect: CGRect) {
         guard let c = UIGraphicsGetCurrentContext() else { return }
+        let page = page, bounds = bounds
+        detail.locked { render(c, bounds: bounds, page: page) }
+    }
+    private func render(_ c: CGContext, bounds: CGRect, page: NotebookPage) {
         c.setFillColor(UIColor(hex: page.paperColor ?? "#FFFFFF").cgColor); c.fill(bounds)
         if let p = pdf?.page(at: page.pdfPage) {
             c.saveGState(); c.translateBy(x: 0, y: bounds.height); c.scaleBy(x: 1, y: -1)
@@ -339,7 +391,7 @@ final class PageInkCanvas: PKCanvasView {
     override var undoManager: UndoManager? { pageUndo }
 }
 
-final class PageViewport: UIView, UITextViewDelegate {
+final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     let scroll = UIScrollView()
     let content: UIView
     let document: UIView
@@ -377,7 +429,7 @@ final class PageViewport: UIView, UITextViewDelegate {
         document.overrideUserInterfaceStyle = .light
         addSubview(scroll); scroll.addSubview(content); content.addSubview(document); document.addSubview(PaperView(page: page, directory: directory))
         original.frame = document.bounds; original.backgroundColor = .clear; original.isUserInteractionEnabled = false; document.addSubview(original)
-        canvas.frame = document.bounds; canvas.backgroundColor = .clear; canvas.isOpaque = false
+        canvas.backgroundColor = .clear; canvas.isOpaque = false
         canvas.maximumSupportedContentVersion = .latest
         canvas.overrideUserInterfaceStyle = .light
         canvas.isScrollEnabled = false; canvas.minimumZoomScale = 1; canvas.maximumZoomScale = 1
@@ -386,6 +438,7 @@ final class PageViewport: UIView, UITextViewDelegate {
         interaction.frame = document.bounds; interaction.backgroundColor = .clear; interaction.isHidden = true; document.addSubview(interaction)
         lasso.frame = document.bounds; lasso.isHidden = true; document.addSubview(lasso)
         scroll.minimumZoomScale = 0.1; scroll.maximumZoomScale = 4; scroll.contentSize = content.bounds.size
+        scroll.delegate = self
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
         scroll.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         content.layer.shadowColor = UIColor.black.cgColor; content.layer.shadowOpacity = 0.13; content.layer.shadowRadius = 12; content.layer.shadowOffset = CGSize(width: 0,height: 4)
@@ -405,9 +458,40 @@ final class PageViewport: UIView, UITextViewDelegate {
         document.transform = .identity; document.bounds = CGRect(origin: .zero, size: page.nativeSize)
         document.center = CGPoint(x: content.bounds.midX, y: content.bounds.midY)
         document.transform = CGAffineTransform(rotationAngle: CGFloat(page.quarterTurns) * .pi / 2)
-        original.frame = document.bounds; canvas.frame = document.bounds; inkInput.frame = document.bounds; interaction.frame = document.bounds; lasso.frame = document.bounds
+        original.frame = document.bounds; inkInput.frame = document.bounds; interaction.frame = document.bounds; lasso.frame = document.bounds
+        layoutCanvas()
         if let paper = document.subviews.first as? PaperView { paper.page = page; paper.frame = document.bounds; paper.setNeedsDisplay() }
         scroll.contentSize = CGSize(width: page.size.width * scroll.zoomScale, height: page.size.height * scroll.zoomScale)
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { scrollView === scroll ? content : nil }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerPage() }
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { updateRenderScale() }
+    /// Zoom of the notebook scroll view that holds this page (1 when the page zooms by itself).
+    var outerZoom: CGFloat = 1 { didSet { updateRenderScale() } }
+    /// Scale PencilKit renders the ink at, matching the on-screen zoom so strokes stay pixel-sharp.
+    private(set) var renderScale: CGFloat = 1
+    func updateRenderScale() {
+        // Quarter steps keep PencilKit from re-rendering on every tiny zoom change.
+        let target = min(8, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        guard target != renderScale else { return }
+        renderScale = target; layoutCanvas(); onRenderScale?()
+    }
+    var onRenderScale: (() -> Void)?
+    /// The canvas is laid out `renderScale` times larger, zoomed by the same factor and shrunk back
+    /// by a transform: it covers exactly the page, but PencilKit draws at the zoomed resolution.
+    private func layoutCanvas() {
+        let size = document.bounds.size, z = renderScale
+        guard size.width > 0, size.height > 0 else { return }
+        canvas.transform = .identity
+        canvas.maximumZoomScale = max(z, canvas.maximumZoomScale)
+        canvas.minimumZoomScale = z; canvas.maximumZoomScale = z
+        canvas.bounds = CGRect(origin: .zero, size: CGSize(width: size.width * z, height: size.height * z))
+        canvas.zoomScale = z
+        canvas.contentSize = CGSize(width: size.width * z, height: size.height * z)
+        canvas.contentOffset = .zero
+        canvas.center = CGPoint(x: size.width / 2, y: size.height / 2)
+        canvas.transform = CGAffineTransform(scaleX: 1 / z, y: 1 / z)
+        canvas.pinchGestureRecognizer?.isEnabled = false
     }
     override func layoutSubviews() {
         super.layoutSubviews(); scroll.frame = bounds
@@ -415,7 +499,7 @@ final class PageViewport: UIView, UITextViewDelegate {
             let initial = lastBounds == .zero
             lastBounds = bounds.size
             if initial { scroll.zoomScale = max(0.1,min(4,min((bounds.width - 88) / content.bounds.width, (bounds.height - 88) / content.bounds.height))) }
-            centerPage()
+            centerPage(); updateRenderScale()
         }
     }
     func centerPage() {

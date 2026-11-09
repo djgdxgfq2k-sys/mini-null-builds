@@ -95,11 +95,12 @@ import PencilKit
 
     private func ensureEntries(around index: Int, includeVisible: Bool) {
         guard !pages.isEmpty else { return }
-        var lower = max(0, index - 2), upper = min(pages.count - 1, index + 2)
+        // Pages are built a few pages ahead so scrolling never shows a page being drawn in.
+        var lower = max(0, index - 3), upper = min(pages.count - 1, index + 3)
         if includeVisible && fitted {
             let visible = stack.convert(scroll.bounds, from: scroll)
             let indices = pages.indices.filter { pageFrames[pages[$0].id]?.intersects(visible) == true }
-            if let first = indices.first, let last = indices.last { lower = max(0, first - 1); upper = min(pages.count - 1, last + 1) }
+            if let first = indices.first, let last = indices.last { lower = max(0, first - 2); upper = min(pages.count - 1, last + 2) }
         }
         if upper - lower + 1 > 16 { lower = max(lower, index - 8); upper = min(upper, lower + 15) }
         let wanted = Set(pages[lower...upper].map(\.id))
@@ -116,6 +117,7 @@ import PencilKit
             coordinator.onActivate = { [weak self] in self?.select(page.id, notify: true) }
             stack.addSubview(viewport.content)
             viewport.content.frame = pageFrames[page.id] ?? CGRect(origin: .zero, size: page.size)
+            viewport.outerZoom = scroll.zoomScale
             coordinator.configure(currentSettings)
             entries[page.id] = Entry(page: page, viewport: viewport, coordinator: coordinator)
         }
@@ -127,7 +129,7 @@ import PencilKit
         lastSize = bounds.size
         changingLayout = true
         scroll.zoomScale = max(0.1, min(4, min((bounds.width - 48) / first.size.width, (bounds.height - 80) / first.size.height)))
-        fitted = true; centerHorizontally()
+        fitted = true; centerHorizontally(); applyRenderZoom()
         if let selectedID { scrollToPage(selectedID) }
         changingLayout = false
         updateVisiblePage()
@@ -183,5 +185,8 @@ import PencilKit
     func flush() { for entry in entries.values { entry.viewport.inkInput.finishPendingStroke(); entry.coordinator.persist() } }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { stack }
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerHorizontally(); updateVisiblePage() }
+    /// After a pinch, every live page re-renders its ink at the new zoom so it stays sharp.
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { applyRenderZoom() }
+    private func applyRenderZoom() { for entry in entries.values { entry.viewport.outerZoom = scroll.zoomScale } }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { updateVisiblePage() }
 }

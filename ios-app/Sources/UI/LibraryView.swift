@@ -21,6 +21,8 @@ import PhotosUI
     @State private var searchShown = false
     @State private var importing = false
     @State private var importBusy = false
+    @State private var importProgress: ImportProgress?
+    private struct ImportProgress: Equatable { var fraction: Double; var label: String }
     @State private var creatingFolder = false
     @State private var title = ""
     @State private var color = Theme.folders[0]
@@ -64,14 +66,20 @@ import PhotosUI
             }
         }
         .overlayPreferenceValue(LibraryMenuAnchorKey.self) { anchors in menuOverlay(anchors) }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, .zip, UTType(importedAs: "com.goodnotesapp.goodnotes.v5"), UTType(exportedAs: "studio.nullmini.notebook")]) { result in
-            Task {
-                importBusy = true; defer { importBusy = false }
-                do { let url = try result.get(); let item = try await NotebookArchive.importAsync(url, into: store, parent: folder); store.open(item.id) }
-                catch { store.error = error.localizedDescription }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, .zip, .folder, UTType(importedAs: "com.goodnotesapp.goodnotes.v5"), UTType(exportedAs: "studio.nullmini.notebook")], allowsMultipleSelection: true) { result in
+            Task { await importSelection(result) }
+        }
+        .overlay {
+            if importBusy {
+                VStack(spacing: 10) {
+                    if let importProgress { ProgressView(value: importProgress.fraction) { Text("Bibliothek importieren …") } currentValueLabel: { Text(importProgress.label).lineLimit(1) }.frame(width: 300) }
+                    else { ProgressView("Notizbuch importieren …") }
+                }
+                .padding(24).background(Theme.pill, in: RoundedRectangle(cornerRadius: 16)).overlay { RoundedRectangle(cornerRadius: 16).stroke(Theme.border) }
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-        .overlay { if importBusy { ProgressView("Notizbuch importieren …").padding(24).background(Theme.pill, in: RoundedRectangle(cornerRadius: 16)).overlay { RoundedRectangle(cornerRadius: 16).stroke(Theme.border) } } }
+        .animation(.easeInOut(duration: 0.2), value: importBusy)
         .sheet(isPresented: $notebookCreation) {
             NotebookCreationView { name, paper, paperColor, size in
                 if var item = store.add(title: name, parent: folder, color: "#FFFFFF") { item.pages[0].paper = paper; item.pages[0].paperColor = paperColor; item.pages[0].width = Double(size.width); item.pages[0].height = Double(size.height); store.update(item); store.open(item.id) }
@@ -257,6 +265,39 @@ import PhotosUI
             canScan: DocumentMediaPDF.canScan,
             canUseCamera: DocumentMediaPDF.canUseCamera
         )
+    }
+    /// One notebook opens right away; a backup ZIP, a folder or several files import as a library
+    /// with their folder tree and stay in the current folder.
+    private func importSelection(_ result: Result<[URL], Error>) async {
+        let urls: [URL]
+        do { urls = try result.get() } catch { store.error = error.localizedDescription; return }
+        guard !urls.isEmpty else { return }
+        importBusy = true; defer { importBusy = false; importProgress = nil }
+        let libraries = urls.filter { LibraryImport.isFolder($0) || LibraryImport.isLibraryBackup($0) }
+        if urls.count == 1, libraries.isEmpty, let url = urls.first {
+            do { let item = try await NotebookArchive.importAsync(url, into: store, parent: folder); store.open(item.id) }
+            catch { store.error = error.localizedDescription }
+            return
+        }
+        var total = LibraryImport.Summary()
+        importProgress = ImportProgress(fraction: 0, label: "")
+        for (index, url) in urls.enumerated() {
+            if libraries.contains(url) {
+                let summary = await LibraryImport.importLibrary(url, into: store, parent: folder) { done, count, name in
+                    let part = count == 0 ? 1 : Double(done) / Double(count)
+                    importProgress = ImportProgress(fraction: (Double(index) + part) / Double(urls.count), label: name)
+                }
+                total.imported += summary.imported; total.folders += summary.folders; total.failed += summary.failed
+            } else {
+                importProgress = ImportProgress(fraction: Double(index) / Double(urls.count), label: url.lastPathComponent)
+                do { _ = try await NotebookArchive.importAsync(url, into: store, parent: folder); total.imported += 1 }
+                catch { total.failed.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+            }
+        }
+        if !total.failed.isEmpty {
+            let list = total.failed.prefix(8).joined(separator: "\n") + (total.failed.count > 8 ? "\n… und \(total.failed.count - 8) weitere" : "")
+            store.error = "\(total.imported) Notizbücher und \(total.folders) Ordner importiert. Nicht importiert:\n" + list
+        }
     }
     private func importImages(_ images: [UIImage], title: String) async {
         guard !images.isEmpty else { return }

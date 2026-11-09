@@ -36,6 +36,26 @@ import PencilKit
         return best
     }
 
+    /// Number of partly grey pixels (neither ink nor paper) in a 2x-scale column through `column`.
+    private func edgePixels(_ view: UIView, column point: CGPoint) -> Int {
+        let box = CGRect(x: point.x, y: point.y - 30, width: 1, height: 60)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 2
+        let image = UIGraphicsImageRenderer(size: box.size, format: format).image { context in
+            context.cgContext.translateBy(x: -box.minX, y: -box.minY)
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        guard let cg = image.cgImage else { return 99 }
+        let width = cg.width, height = cg.height
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        var grey = 0
+        for y in 0..<height { let i = y * width * 4; let sum = Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2]); if sum > 120 && sum < 560 { grey += 1 } }
+        return grey
+    }
+
     func testPageTouchLandsOnInkLayerForPencilAndFinger() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -66,6 +86,20 @@ import PencilKit
                 XCTAssertTrue(types.contains(UITouch.TouchType.direct.rawValue), "finger mode: fingers and passive styluses are not allowed to draw: \(types)")
                 XCTAssertEqual(canvas.drawingPolicy, .anyInput)
             }
+            // Zoom in like a pinch would: the ink must re-render at that zoom, not be scaled up.
+            let notebook = try XCTUnwrap(allViews(window).compactMap { $0 as? NotebookViewport }.first)
+            notebook.scroll.setZoomScale(2.5, animated: false)
+            notebook.scrollViewDidEndZooming(notebook.scroll, with: nil, atScale: 2.5)
+            host.view.layoutIfNeeded()
+            let document = try XCTUnwrap(canvas.superview)
+            XCTAssertEqual(canvas.zoomScale, 2.5, accuracy: 0.01, "finger=\(finger): ink is not rendered at the on-screen zoom")
+            XCTAssertEqual(canvas.frame.width, document.bounds.width, accuracy: 0.5, "finger=\(finger): sharp canvas no longer covers the page")
+            XCTAssertEqual(canvas.frame.height, document.bounds.height, accuracy: 0.5)
+            let pageOnScreen = document.convert(document.bounds, to: window)
+            let pageTop = CGPoint(x: pageOnScreen.midX, y: max(pageOnScreen.minY, 0) + 300)
+            notebook.scroll.contentOffset.x += pageOnScreen.midX - window.bounds.midX
+            notebook.scroll.contentOffset.y += pageTop.y - window.bounds.midY
+            host.view.layoutIfNeeded()
             let visible = canvas.convert(canvas.bounds, to: window).intersection(window.bounds.insetBy(dx: 0, dy: 120))
             XCTAssertFalse(visible.isNull || visible.isEmpty, "finger=\(finger): page canvas is not on screen")
             let point = CGPoint(x: visible.midX, y: visible.midY + CGFloat(round) * 60)
@@ -73,12 +107,16 @@ import PencilKit
             XCTAssertTrue(hit?.isDescendant(of: canvas) == true, "finger=\(finger): touch at \(point) lands on \(chain(hit)) instead of the page canvas (\(chain(canvas)))")
 
             // Black ink on the page must render dark, not inverted to white by the dark app UI.
-            let local = canvas.convert(point, from: window)
+            let local = document.convert(point, from: window)
             var drawing = canvas.drawing
-            drawing.strokes.append(StrokeFactory.stroke(points: (0...30).map { CGPoint(x: local.x - 60 + CGFloat($0) * 4, y: local.y) }, color: .black, width: 4))
+            drawing.strokes.append(StrokeFactory.stroke(points: (0...30).map { CGPoint(x: local.x - 15 + CGFloat($0), y: local.y) }, color: .black, width: 4))
             canvas.drawing = drawing
-            try await Task.sleep(nanoseconds: 600_000_000)
+            try await Task.sleep(nanoseconds: 800_000_000)
             let dry = darkest(host.view, around: point)
+            // A 4 pt line at 2.5x zoom is 20 screen pixels tall; rendered sharply its edges are ~1 px of grey each,
+            // while 2x ink scaled up 2.5x smears each edge over several pixels.
+            let grey = edgePixels(host.view, column: point)
+            XCTAssertLessThanOrEqual(grey, 6, "finger=\(finger): zoomed ink looks blurry (\(grey) grey edge pixels)")
             let format = UIGraphicsImageRendererFormat(); format.scale = 1
             let screen = UIGraphicsImageRenderer(size: host.view.bounds.size, format: format).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
             let shot = XCTAttachment(image: screen); shot.name = "touch-routing-finger-\(finger)"; shot.lifetime = .keepAlways; add(shot)

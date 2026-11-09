@@ -125,9 +125,21 @@ struct OriginalInk {
 }
 
 final class OriginalInkView: UIView {
-    var ink = OriginalInk() { didSet { setNeedsDisplay() } }
+    var ink = OriginalInk() { didSet { let ink = ink; detail.locked { tileInk = ink }; setNeedsDisplay() } }
+    private var tileInk = OriginalInk()
+    private lazy var detail = SharpDetailView { [weak self] c, _ in
+        guard let self else { return }
+        Self.render(c, ink: self.tileInk)
+    }
+    override init(frame: CGRect) { super.init(frame: frame); detail.frame = bounds; addSubview(detail) }
+    required init?(coder: NSCoder) { nil }
+    override func setNeedsDisplay() { super.setNeedsDisplay(); detail.setNeedsDisplay() }
     override func draw(_ rect: CGRect) {
         guard let c = UIGraphicsGetCurrentContext() else { return }
+        Self.render(c, ink: ink)
+    }
+    private static func render(_ c: CGContext, ink: OriginalInk) {
+        guard !ink.strokes.isEmpty else { return }
         for s in ink.strokes {
             c.saveGState(); c.setStrokeColor(s.color.cgColor); c.setFillColor(s.color.cgColor)
             c.setLineWidth(s.width); c.setLineCap(.round); c.setLineJoin(.round); c.addPath(s.path)
