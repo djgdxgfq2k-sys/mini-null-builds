@@ -44,17 +44,17 @@ import ZIPFoundation
         XCTAssertEqual(store.items.count, before + 8)
         XCTAssertFalse(reported.contains("Ausbruch.pdf"), "paths leaving the backup must be skipped")
 
-        func folder(_ title: String, in parent: String?) throws -> LibraryItem {
-            try XCTUnwrap(store.items.first { $0.folder && $0.title == title && $0.parent == parent }, "missing folder \(title)")
+        func folder(_ title: String, in parent: String?) throws -> String {
+            try XCTUnwrap(store.items.first { $0.folder && $0.title == title && $0.parent == parent }?.id, "missing folder \(title)")
         }
         let schule = try folder("Schule", in: nil)
-        let mathe = try folder("Mathe", in: schule.id)
-        let unterricht = try folder("Unterricht", in: mathe.id)
-        _ = try folder("Geo", in: schule.id)
+        let mathe = try folder("Mathe", in: schule)
+        let unterricht = try folder("Unterricht", in: mathe)
+        _ = try folder("Geo", in: schule)
         let lesson = try XCTUnwrap(store.items.first { $0.title == "Q1 Unterricht" })
-        XCTAssertEqual(lesson.parent, unterricht.id)
+        XCTAssertEqual(lesson.parent, unterricht)
         XCTAssertFalse(lesson.folder); XCTAssertEqual(lesson.pages.count, 1)
-        XCTAssertEqual(store.items.first { $0.title == "Lose Notiz" }?.parent, nil)
+        XCTAssertNil(try XCTUnwrap(store.items.first { $0.title == "Lose Notiz" }).parent)
 
         // A second import reuses the folders instead of duplicating them.
         let again = await LibraryImport.importLibrary(zip, into: store, parent: nil) { _, _, _ in }
@@ -81,7 +81,7 @@ import ZIPFoundation
         let store = LibraryStore(root: root.appendingPathComponent("library"))
         let summary = await LibraryImport.importLibrary(picked, into: store, parent: nil) { _, _, _ in }
         XCTAssertEqual(summary.imported, 2, "\(summary.failed)")
-        let physik = try XCTUnwrap(store.items.first { $0.folder && $0.title == "Physik" })
-        XCTAssertEqual(store.items.first { $0.title == "Wellen" }?.parent, physik.id)
+        let physik = try XCTUnwrap(store.items.first { $0.folder && $0.title == "Physik" }?.id)
+        XCTAssertEqual(try XCTUnwrap(store.items.first { $0.title == "Wellen" }).parent, physik)
     }
 }
