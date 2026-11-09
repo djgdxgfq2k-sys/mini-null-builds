@@ -16,8 +16,12 @@ struct ByteReader {
         return Data(bytes[position ..< position + count])
     }
     mutating func uint(_ count: Int) throws -> UInt64 {
-        let b = try take(count)
-        return b.enumerated().reduce(0) { $0 | UInt64($1.element) << ($1.offset * 8) }
+        // Reads straight from the byte array: stroke arrays hold tens of thousands of values.
+        guard count >= 0, count <= 8, count <= remaining else { throw NotebookError.invalid("Abgeschnittene Datei.") }
+        var value: UInt64 = 0
+        for i in 0 ..< count { value |= UInt64(bytes[position + i]) << (i * 8) }
+        position += count
+        return value
     }
     mutating func varint() throws -> UInt64 {
         var result: UInt64 = 0

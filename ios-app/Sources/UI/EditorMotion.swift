@@ -42,3 +42,15 @@ struct WritingToolIcon: View {
         }.frame(width: 32, height: 32)
     }
 }
+
+/// `.plain` only hit-tests the drawn pixels of a label, so taps between the thin lines of an icon or
+/// beside a title were lost. This style keeps the plain look but makes the whole label frame tappable.
+struct SolidPlainButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.easeOut(duration: configuration.isPressed ? 0.05 : 0.15), value: configuration.isPressed)
+    }
+}
+extension ButtonStyle where Self == SolidPlainButtonStyle { static var solidPlain: SolidPlainButtonStyle { SolidPlainButtonStyle() } }

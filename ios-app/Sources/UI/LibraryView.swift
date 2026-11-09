@@ -37,6 +37,8 @@ import PhotosUI
     @State private var editItem: LibraryItem?
     @State private var editing: LibraryEdit?
     @State private var renaming = false
+    /// Direction of the folder push: into a folder slides in from the right, back slides in from the left.
+    @State private var forward = true
     init(showFolderCreation: Bool = false, sidebarShown: Bool = true, menu: LibraryMenuKind? = nil, folderID: String? = nil) {
         _creatingFolder = State(initialValue: showFolderCreation)
         _sidebarShown = State(initialValue: sidebarShown)
@@ -162,6 +164,7 @@ import PhotosUI
                         HStack { Image(systemName: "magnifyingglass"); TextField("Suchen", text: $query).textFieldStyle(.plain); Button { query = ""; searchShown = false } label: { Image(systemName: "xmark.circle.fill") } }
                             .padding(10).background(Theme.pill, in: Capsule()).padding(.horizontal, 20).padding(.top, 15)
                     }
+                    ZStack {
                     ScrollView {
                         if listLayout {
                             LazyVStack(spacing: 0) { ForEach(visible) { item in itemRow(item); Divider().overlay(Theme.border) } }.padding(.horizontal, 20).padding(.top, 20)
@@ -174,14 +177,17 @@ import PhotosUI
                             ContentUnavailableView(librarySection ?? (trash ? "Papierkorb ist leer" : "Keine Ergebnisse"), systemImage: trash ? "trash" : "doc.text.magnifyingglass", description: Text(query.isEmpty ? "Hier werden deine Dokumente angezeigt." : "Keine Dokumente für diese Suche.")).padding(.top, 80)
                         }
                     }.scrollIndicators(.hidden)
+                    .id(locationKey)
+                    .transition(.asymmetric(insertion: .move(edge: forward ? .trailing : .leading), removal: .move(edge: forward ? .leading : .trailing)).combined(with: .opacity))
+                    }.clipped()
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }.foregroundStyle(.white).tint(Theme.accent).buttonStyle(.plain)
+            }.foregroundStyle(.white).tint(Theme.accent).buttonStyle(.solidPlain)
         }.background(Theme.library.ignoresSafeArea())
     }
     private var topChrome: some View {
         HStack(spacing: 10) {
             if !sidebarShown { Button { sidebarShown = true } label: { Image(systemName: "sidebar.left").frame(width: 44, height: 40).background(Color(hex: "#181818"), in: Capsule()) }.accessibilityLabel("Seitenleiste einblenden") }
-            if folder != nil { Button { folder = store.item(folder)?.parent } label: { Image(systemName: "chevron.left").frame(width: 40, height: 40).background(Color(hex: "#181818"), in: Circle()) }.accessibilityLabel("Zurück") }
+            if folder != nil { Button { go(to: store.item(folder)?.parent, forward: false) } label: { Image(systemName: "chevron.left").frame(width: 40, height: 40).background(Color(hex: "#181818"), in: Circle()) }.accessibilityLabel("Zurück") }
             Spacer()
             if folder != nil { Text(heading).font(.system(size: 15, weight: .semibold)); Spacer() }
             HStack(spacing: 0) {
@@ -251,7 +257,21 @@ import PhotosUI
             }.padding(.horizontal, 17).frame(height: 48).foregroundStyle(.white).background(selected ? Theme.selectedRow : .clear, in: Capsule())
         }.padding(.horizontal, 16)
     }
-    private func navigate(favorites: Bool = false, trash: Bool = false) { self.favorites = favorites; self.trash = trash; librarySection = nil; folder = nil; filter = "Alle"; selecting = false; selectedIDs.removeAll(); activeMenu = nil }
+    private func navigate(favorites: Bool = false, trash: Bool = false) {
+        forward = true
+        withAnimation(.easeInOut(duration: 0.25)) { self.favorites = favorites; self.trash = trash; librarySection = nil; folder = nil; filter = "Alle"; selecting = false; selectedIDs.removeAll(); activeMenu = nil }
+    }
+    private var locationKey: String { (folder ?? "root") + (trash ? "/trash" : "") + (favorites ? "/favorites" : "") + (librarySection ?? "") + (listLayout ? "/list" : "") }
+    /// Folders push like Goodnotes: the direction is set first so both the leaving and the arriving grid slide the same way.
+    private func go(to target: String?, forward: Bool) {
+        self.forward = forward
+        DispatchQueue.main.async { withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) { folder = target; favorites = false } }
+    }
+    private func remember(_ location: CGPoint) {
+        let size = UIScreen.main.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        store.openAnchor = UnitPoint(x: min(1, max(0, location.x / size.width)), y: min(1, max(0, location.y / size.height)))
+    }
     private var newDocumentMenu: some View {
         NewDocumentPopover(
             notebook: { newPopover = false; notebookCreation = true },
@@ -311,7 +331,7 @@ import PhotosUI
     }
     private func open(_ item: LibraryItem) {
         if selecting { if selectedIDs.contains(item.id) { selectedIDs.remove(item.id) } else { selectedIDs.insert(item.id) }; return }
-        if trash { return }; if item.folder { folder = item.id; favorites = false } else { store.open(item.id) }
+        if trash { return }; if item.folder { go(to: item.id, forward: true) } else { store.open(item.id) }
     }
     private func itemCard(_ item: LibraryItem) -> some View {
         VStack(spacing: 0) {
@@ -330,13 +350,17 @@ import PhotosUI
             }.frame(width: 146, height: 152).frame(maxWidth: .infinity)
             HStack(spacing: 4) { Text(item.title).font(.system(size: 13.5)).lineLimit(2).multilineTextAlignment(.center); chevron(item) }.frame(minHeight: 28).padding(.top, 9)
             Text(Theme.libraryDate.string(from: item.modified)).font(.system(size: 10)).foregroundStyle(Color(hex: "#8A8989")).lineLimit(1)
-        }.contextMenu { contextActions(item) }
+        }
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { remember($0.location) })
+        .contextMenu { contextActions(item) }
     }
     private func itemRow(_ item: LibraryItem) -> some View {
         HStack(spacing: 16) {
             Button { open(item) } label: { HStack(spacing: 16) { Image(systemName: item.folder ? (item.symbol ?? "folder.fill") : "book.closed.fill").font(.system(size: 26)).foregroundStyle(Color(hex: item.color)); VStack(alignment: .leading, spacing: 4) { Text(item.title).foregroundStyle(.white); Text(Theme.libraryDate.string(from: item.modified)).font(.caption).foregroundStyle(Theme.secondary) } }.frame(maxWidth: .infinity, alignment: .leading) }
             Button { if selecting { open(item) } else { store.toggleFavorite(item.id) } } label: { Image(systemName: selecting ? (selectedIDs.contains(item.id) ? "checkmark.circle.fill" : "circle") : (item.favorite ? "star.fill" : "star")).foregroundStyle(selecting ? Theme.accent : Theme.secondary) }; chevron(item)
-        }.padding(.vertical, 14).contextMenu { contextActions(item) }
+        }.padding(.vertical, 14)
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { remember($0.location) })
+        .contextMenu { contextActions(item) }
     }
     private func chevron(_ item: LibraryItem) -> some View {
         Button { contextID = item.id } label: { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary).frame(width: 24, height: 32) }.accessibilityLabel("Optionen für \(item.title)")
@@ -354,7 +378,7 @@ import PhotosUI
             }
     }
     private func menuRow(_ label: String, symbol: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) { HStack { Text(label); Spacer(); Image(systemName: symbol) }.font(.system(size: 15)).foregroundStyle(destructive ? Color.red : .white).padding(.horizontal, 17).frame(height: 44).contentShape(Rectangle()) }.buttonStyle(.plain)
+        Button(action: action) { HStack { Text(label); Spacer(); Image(systemName: symbol) }.font(.system(size: 15)).foregroundStyle(destructive ? Color.red : .white).padding(.horizontal, 17).frame(height: 44).contentShape(Rectangle()) }.buttonStyle(.solidPlain)
     }
     @ViewBuilder private func contextActions(_ item: LibraryItem) -> some View {
         if trash { Button("Wiederherstellen", systemImage: "arrow.uturn.backward") { store.restore(item.id) } }

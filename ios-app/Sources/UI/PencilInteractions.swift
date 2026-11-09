@@ -112,7 +112,7 @@ enum PencilPalette: String, Identifiable {
                 }
                 Button(action: showColors) { Image(systemName: "plus").frame(width: 40, height: 40) }.accessibilityLabel("Weitere Farben")
             }
-        }.padding(10).foregroundStyle(.white).background(Theme.popover).buttonStyle(.plain)
+        }.padding(10).foregroundStyle(.white).background(Theme.popover).buttonStyle(.solidPlain)
             .presentationBackground(Theme.popover).presentationCompactAdaptation(.popover)
     }
     private func tool(_ tool: EditorTool, asset: String, catalog: Bundle? = OriginalAssets.icons) -> some View {

@@ -55,7 +55,7 @@ import PDFKit
                     }
                 }
             }
-        }.ignoresSafeArea(edges: .bottom).background(Theme.top.ignoresSafeArea(edges: .top)).buttonStyle(.plain)
+        }.ignoresSafeArea(edges: .bottom).background(Theme.top.ignoresSafeArea(edges: .top)).buttonStyle(.solidPlain)
         .overlay { pencilGestures }
         .modifier(EditorPageImport(bookID: bookID, commands: commands, pageIndex: $pageIndex, request: $pageMedia))
         .onAppear {

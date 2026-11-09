@@ -11,6 +11,41 @@ enum LibraryImport {
         var failed: [String] = []
     }
     struct Source { let path: [String]; let name: String; let load: () throws -> URL }
+    struct FolderStyle: Equatable { var color: String; var symbol: String? }
+
+    /// Goodnotes stores folder colours and symbols in `.goodnotesmeta` at the backup root:
+    /// `{"items":[{"path":"Schule/Bio","color":"green","symbol":"none"}]}`. Colours are names or hex.
+    static func folderStyles(_ data: Data) -> [String: FolderStyle] {
+        struct Meta: Decodable { struct Item: Decodable { let path: String; let color: String?; let symbol: String? }; let items: [Item] }
+        guard let meta = try? JSONDecoder().decode(Meta.self, from: data) else { return [:] }
+        let palette = ReferenceLayout.folderPalette
+        let named: [String: String] = [
+            "black": palette[8], "gray": palette[16], "grey": palette[16], "white": palette[17],
+            "red": palette[9], "orange": palette[10], "yellow": palette[11], "green": palette[12],
+            "blue": palette[13], "purple": palette[14], "pink": palette[15], "brown": palette[1],
+        ]
+        let symbols: Set<String> = ["atom", "apple", "banknote", "beaker", "book", "briefcase", "building", "calculator", "codesnippet", "compass", "file", "globe", "graduation", "moonstar", "musicnote", "palette", "scales", "settings", "smile"]
+        var result: [String: FolderStyle] = [:]
+        for item in meta.items {
+            guard let parts = components(item.path) else { continue }
+            let raw = (item.color ?? "").trimmingCharacters(in: .whitespaces)
+            let color: String
+            if let mapped = named[raw.lowercased()] { color = mapped }
+            else if raw.hasPrefix("#"), raw.count == 7, UInt32(raw.dropFirst(), radix: 16) != nil { color = raw.uppercased() }
+            else { continue }
+            let symbol = item.symbol.flatMap { symbols.contains($0) ? "folder-symbols/folder_icon_" + $0 : nil }
+            result[parts.joined(separator: "/")] = FolderStyle(color: color, symbol: symbol)
+        }
+        return result
+    }
+    static func metaData(_ url: URL) -> Data? {
+        if isFolder(url) { return try? Data(contentsOf: url.appendingPathComponent(".goodnotesmeta")) }
+        guard let archive = try? Archive(url: url, accessMode: .read),
+              let entry = archive.first(where: { $0.type == .file && $0.path == ".goodnotesmeta" }), entry.uncompressedSize < 4_000_000 else { return nil }
+        var data = Data()
+        _ = try? archive.extract(entry) { data.append($0) }
+        return data
+    }
 
     static let notebookExtensions: Set<String> = ["goodnotes", "pdf"]
 
@@ -44,6 +79,7 @@ enum LibraryImport {
         do { sources = try await Task.detached(priority: .userInitiated) { try listSources(url, scratch: scratch) }.value }
         catch { summary.failed.append("\(url.lastPathComponent): \(error.localizedDescription)"); return summary }
         guard !sources.isEmpty else { summary.failed.append("\(url.lastPathComponent): keine Notizbücher gefunden"); return summary }
+        let styles = await Task.detached(priority: .userInitiated) { metaData(url).map(folderStyles) ?? [:] }.value
 
         var folderIDs: [[String]: String] = [:]
         func folder(for path: [String]) -> String? {
@@ -52,10 +88,14 @@ enum LibraryImport {
             let above = folder(for: Array(path.dropLast()))
             let title = path[path.count - 1]
             // Importing the same backup twice reuses the folders that already exist.
-            if let existing = store.items.first(where: { $0.folder && $0.trashed != true && $0.parent == above && $0.title == title }) {
+            let style = styles[path.joined(separator: "/")]
+            if var existing = store.items.first(where: { $0.folder && $0.trashed != true && $0.parent == above && $0.title == title }) {
+                if let style, existing.color != style.color || existing.symbol != style.symbol { existing.color = style.color; existing.symbol = style.symbol; store.update(existing) }
                 folderIDs[path] = existing.id; return existing.id
             }
-            guard let created = store.add(title: title, parent: above, folder: true) else { return above }
+            // Goodnotes folders without a stored colour are blue.
+            guard var created = store.add(title: title, parent: above, folder: true, color: style?.color ?? ReferenceLayout.folderPalette[13]) else { return above }
+            if let symbol = style?.symbol { created.symbol = symbol; store.update(created) }
             summary.folders += 1; folderIDs[path] = created.id; return created.id
         }
 

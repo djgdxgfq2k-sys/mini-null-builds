@@ -16,7 +16,7 @@ struct FolderColorGrid: View {
             ColorPicker("Eigene Farbe", selection: $custom, supportsOpacity: false).labelsHidden().frame(width: 26, height: 26).opacity(0.02)
                 .overlay { OriginalIcon(name: "folder-palette/rainbow", catalog: OriginalAssets.library, size: 23, original: true).allowsHitTesting(false) }
                 .onChange(of: custom) { _, value in action(UIColor(value).displayP3Hex) }
-        }.frame(width: 330).padding(.vertical, 10).buttonStyle(.plain)
+        }.frame(width: 330).padding(.vertical, 10).buttonStyle(.solidPlain)
     }
 }
 

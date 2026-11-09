@@ -109,8 +109,14 @@ enum NotebookArchive {
                             }
                         }
                     }
-                    // A page whose strokes cannot all be read still imports; unreadable strokes stay in the original archive.
-                    if let data = files[layout.notesPath], let ink = try? OriginalInk.read(data) { unsupported += ink.unsupported } else { unsupported += 1 }
+                    // Strokes become editable PencilKit strokes. A page whose strokes cannot all be read still
+                    // imports; unreadable elements stay in the original archive and its overlay draws what it can.
+                    if let data = files[layout.notesPath], let ink = try? OriginalInk.read(data, convert: true) {
+                        unsupported += ink.unsupported
+                        if !ink.editable.isEmpty { try DrawingDisk.save(PKDrawing(strokes: ink.editable), directory: directory, page: page.id) }
+                        page.inkConverted = true
+                        if ink.strokes.isEmpty && ink.unsupported == 0 { page.sourceNotes = nil }
+                    } else { unsupported += 1 }
                     item.pages.append(page)
                 }
                 if unsupported > 0 { item.warnings.append("\(unsupported) besondere Elemente (z. B. Bilder oder Spezialstifte) werden noch nicht angezeigt, bleiben aber im Original erhalten.") }
@@ -123,7 +129,10 @@ enum NotebookArchive {
     }
     static func originalInk(page: NotebookPage, directory: URL) throws -> OriginalInk {
         guard let path = page.sourceNotes else { return OriginalInk() }
-        return try OriginalInk.read(entry(path, in: directory.appendingPathComponent("original.goodnotes")))
+        // Converted pages keep only what could not become PencilKit strokes on the original layer.
+        var ink = try OriginalInk.read(entry(path, in: directory.appendingPathComponent("original.goodnotes")), convert: page.inkConverted == true)
+        ink.editable = []
+        return ink
     }
     /// One member of an archive, with the same safety checks as `entries`, without unpacking the rest.
     static func entry(_ path: String, in url: URL) throws -> Data {

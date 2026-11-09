@@ -10,6 +10,8 @@ struct NotebookPage: Identifiable, Codable, Hashable {
     var pdf: String?
     var pdfPage = 0
     var sourceNotes: String?
+    /// Imported Goodnotes strokes were turned into editable PencilKit strokes; the original layer only draws what could not be.
+    var inkConverted: Bool?
     var bookmarked = false
     var paper = "lined"
     var paperColor: String?
@@ -57,6 +59,8 @@ struct ArchiveManifest: Codable {
     @Published private(set) var items: [LibraryItem] = []
     @Published var opened: [String] = []
     @Published var active: String?
+    /// Where on screen the notebook being opened was tapped; the editor zooms out of that point.
+    var openAnchor: UnitPoint = .center
     @Published var error: String?
     let root: URL
     private var writable = true

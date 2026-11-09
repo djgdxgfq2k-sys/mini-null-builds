@@ -34,7 +34,7 @@ struct PageAddPopover: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 10)
             }
-        }.frame(width: 390, height: 650).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.frame(width: 390, height: 650).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
     }
     private var mediaDivider: some View { Divider().overlay(Theme.border.opacity(0.45)).padding(.leading, 54).padding(.trailing, 16) }
     private func mediaRow(_ kind: PageMediaKind, _ title: String, asset: String, catalog: Bundle? = OriginalAssets.icons, enabled: Bool = true) -> some View {
@@ -126,7 +126,7 @@ struct DocumentMorePopover: View {
                     }
                 }.padding(.horizontal, 17).padding(.top, 15).padding(.bottom, 17)
             }.scrollIndicators(.hidden)
-        }.frame(width: 320, height: 665).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.frame(width: 320, height: 665).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
             .alert("Gehe zu Seite", isPresented: $goingToPage) { TextField("1 – \(pageCount)", text: $pageInput).keyboardType(.numberPad); Button("Abbrechen", role: .cancel) {}; Button("Öffnen") { if let number = Int(pageInput), (1...max(1, pageCount)).contains(number) { goToPage(number - 1) } } }
     }
     private func divider(full: Bool = false) -> some View { Divider().overlay(Theme.border.opacity(0.45)).padding(.leading, full ? 16 : 55).padding(.trailing, 16) }
@@ -159,7 +159,7 @@ struct ReferenceActionRow: View {
     var system: String? = nil
     let action: () -> Void
     init(_ title: String, asset: String? = nil, system: String? = nil, action: @escaping () -> Void) { self.title = title; self.asset = asset; self.system = system; self.action = action }
-    var body: some View { Button(action: action) { ReferenceRowLabel(title: title, asset: asset, system: system) }.buttonStyle(.plain) }
+    var body: some View { Button(action: action) { ReferenceRowLabel(title: title, asset: asset, system: system) }.buttonStyle(.solidPlain) }
 }
 struct ReferenceRowLabel: View {
     let title: String

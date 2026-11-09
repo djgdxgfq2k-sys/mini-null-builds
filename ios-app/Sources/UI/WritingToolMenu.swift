@@ -12,7 +12,7 @@ struct WritingToolMenu: View {
                 row("Tape", asset: "newToolbar/writing_tools/tools/tape").opacity(0.4)
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 24))
             Button(action: customize) { Text("Werkzeugleiste anpassen").font(.system(size: 15)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).frame(height: 44) }.background(Theme.pill, in: Capsule())
-        }.padding(16).frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.padding(16).frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
     }
     private func row(_ label: String, asset: String) -> some View { HStack(spacing: 12) { OriginalIcon(name: asset, size: 24); Text(label).font(.system(size: 15)); Spacer() }.padding(.horizontal, 14).frame(height: 44) }
 }

@@ -1,16 +1,26 @@
 import UIKit
+import PencilKit
 
 struct OriginalStroke {
     let path: CGPath
     let color: UIColor
     let width: CGFloat
     let filled: Bool
+    func moved(_ t: CGAffineTransform) -> OriginalStroke {
+        guard !t.isIdentity else { return self }
+        var t = t
+        return OriginalStroke(path: path.copy(using: &t) ?? path, color: color, width: width, filled: filled)
+    }
 }
 struct OriginalInk {
     var strokes: [OriginalStroke] = []
+    /// Pen, fountain-pen and highlighter strokes rebuilt as PencilKit strokes, so they can be erased,
+    /// lassoed and undone like anything written in NullMini. Filled only when `read(_:convert:)` converts.
+    var editable: [PKStroke] = []
     var unsupported = 0
-    static func read(_ data: Data) throws -> OriginalInk {
+    static func read(_ data: Data, convert: Bool = false) throws -> OriginalInk {
         var result = OriginalInk()
+        let date = Date(timeIntervalSince1970: 0)
         for record in try WireMessage.records(data) {
             guard let field = record[7] else { continue }
             // Some elements under field 7 are not stroke messages; count them instead of failing the page.
@@ -22,12 +32,132 @@ struct OriginalInk {
                 let colorMessage = try m[4]?.message()
                 let c = UIColor(red: colorMessage?[1]?.float ?? 0, green: colorMessage?[2]?.float ?? 0,
                                 blue: colorMessage?[3]?.float ?? 0, alpha: colorMessage?[4]?.float ?? 1)
-                if type == 0 { if let stroke = try constant(raw, color: c) { result.strokes.append(stroke) } }
-                else if type == 1 { result.strokes.append(contentsOf:try flattened(raw,color:c)) }
+                // Field 6 is where a stroke was moved to after it was drawn (lasso moves).
+                var offset = CGAffineTransform.identity
+                if let move = try? m[6]?.message() {
+                    let dx = move[1]?.float ?? 0, dy = move[2]?.float ?? 0
+                    if dx.isFinite, dy.isFinite { offset = CGAffineTransform(translationX: dx, y: dy) }
+                }
+                let marker = m[5]?.integer == 1
+                if convert, [0, 1, 4].contains(type) {
+                    let lines = try centerlines(raw, type: Int(type))
+                    result.editable += lines.compactMap { editableStroke($0, offset: offset, color: c, marker: marker, variable: type != 0, date: date) }
+                    continue
+                }
+                if type == 0 { if let stroke = try constant(raw, color: c) { result.strokes.append(stroke.moved(offset)) } }
+                else if type == 1 { result.strokes.append(contentsOf: try flattened(raw, color: c).map { $0.moved(offset) }) }
                 else { result.unsupported += 1 }
             } catch { result.unsupported += 1 }
         }
         return result
+    }
+
+    struct InkPoint: Equatable { var point: CGPoint; var radius: CGFloat }
+
+    /// Centre lines with their half widths. Constant pens (type 0) store move/quad commands and one width;
+    /// variable pens store per-point radii: type 1 as start dots followed by quadratic segments
+    /// (control and end, each x, y, radius), type 4 as dots and straight pieces (x0, y0, x1, y1, r0, r1).
+    static func centerlines(_ data: Data, type: Int) throws -> [[InkPoint]] {
+        var r = ByteReader(data)
+        guard try r.take(4) == Data([116, 112, 108, 0]), Int(try r.uint(4)) == data.count else { throw NotebookError.invalid("Unbekannter Strichcontainer.") }
+        var format = Data()
+        while true { let b = try r.take(1); if b.first == 0 { break }; format.append(b) }
+        let name = String(data: format, encoding: .ascii) ?? ""
+        _ = try r.uint(2)
+        var lines: [[InkPoint]] = []
+        func sampleQuad(_ a: InkPoint, _ control: InkPoint, _ b: InkPoint, into line: inout [InkPoint]) {
+            let length = hypot(control.point.x - a.point.x, control.point.y - a.point.y) + hypot(b.point.x - control.point.x, b.point.y - control.point.y)
+            let steps = max(1, min(64, Int((length / 1.5).rounded(.up))))
+            for i in 1 ... steps {
+                let t = CGFloat(i) / CGFloat(steps), u = 1 - t
+                let x = u * u * a.point.x + 2 * u * t * control.point.x + t * t * b.point.x
+                let y = u * u * a.point.y + 2 * u * t * control.point.y + t * t * b.point.y
+                let radius = u * u * a.radius + 2 * u * t * control.radius + t * t * b.radius
+                line.append(InkPoint(point: CGPoint(x: x, y: y), radius: radius))
+            }
+        }
+        if type == 0 {
+            guard name == "vuA(v)A(S(uu))A(S(uuuu))vA(f)" else { throw NotebookError.invalid("Unbekannte Strichversion.") }
+            let radius = max(0.05, min(5000, try r.float() / 2))
+            func count(_ stride: Int) throws -> Int { let n = Int(try r.uint(4)); guard n <= r.remaining / stride else { throw NotebookError.invalid("Stricharray abgeschnitten.") }; return n }
+            var commands: [UInt64] = []
+            for _ in 0 ..< (try count(2)) { commands.append(try r.uint(2)) }
+            var moves: [CGPoint] = []
+            for _ in 0 ..< (try count(8)) { moves.append(CGPoint(x: try r.float(), y: try r.float())) }
+            var quads: [(CGPoint, CGPoint)] = []
+            for _ in 0 ..< (try count(16)) { quads.append((CGPoint(x: try r.float(), y: try r.float()), CGPoint(x: try r.float(), y: try r.float()))) }
+            var a = 0, b = 0, line: [InkPoint] = []
+            for command in commands {
+                if command == 0 {
+                    guard a < moves.count else { throw NotebookError.invalid("Startpunkt fehlt.") }
+                    if !line.isEmpty { lines.append(line) }
+                    line = [InkPoint(point: moves[a], radius: radius)]; a += 1
+                } else if command == 1 {
+                    guard b < quads.count, let last = line.last else { throw NotebookError.invalid("Kurvenpunkt fehlt.") }
+                    sampleQuad(last, InkPoint(point: quads[b].0, radius: radius), InkPoint(point: quads[b].1, radius: radius), into: &line); b += 1
+                } else { throw NotebookError.invalid("Unbekannter Strichbefehl.") }
+            }
+            if !line.isEmpty { lines.append(line) }
+            return lines
+        }
+        guard name.hasSuffix("A(v)A(u)A(u)A(v)A(v)A(u)A(u)A(u)A(u)A(v)") else { throw NotebookError.invalid("Unbekannte variable Strichversion.") }
+        if name.hasPrefix("vu") { _ = try r.float() }
+        var arrays: [[CGFloat]] = []
+        for size in [2, 4, 4, 2, 2, 4, 4, 4, 4, 2] {
+            let n = Int(try r.uint(4)); guard n <= r.remaining / size else { throw NotebookError.invalid("Stricharray abgeschnitten.") }
+            var values: [CGFloat] = []; values.reserveCapacity(n)
+            for _ in 0 ..< n { values.append(size == 2 ? CGFloat(try r.uint(2)) : try r.float()) }
+            arrays.append(values)
+        }
+        var i1 = 0, i2 = 0, line: [InkPoint] = []
+        func take(_ array: Int, _ index: inout Int, _ n: Int) throws -> [CGFloat] {
+            guard index + n <= arrays[array].count else { throw NotebookError.invalid("Vektorbefehl abgeschnitten.") }
+            defer { index += n }; return Array(arrays[array][index ..< index + n])
+        }
+        func dot(_ p: [CGFloat]) { if !line.isEmpty { lines.append(line) }; line = [InkPoint(point: CGPoint(x: p[0], y: p[1]), radius: max(0.05, p[2]))] }
+        for command in arrays[0] {
+            switch Int(command) {
+            case 0, 2: dot(try take(1, &i1, 3))
+            case 4: dot(try take(1, &i1, 4))
+            case 1, 5:
+                let p = try take(2, &i2, Int(command) == 1 ? 6 : 9)
+                let control = InkPoint(point: CGPoint(x: p[0], y: p[1]), radius: max(0.05, p[2])), end = InkPoint(point: CGPoint(x: p[3], y: p[4]), radius: max(0.05, p[5]))
+                if let last = line.last { sampleQuad(last, control, end, into: &line) } else { line = [control, end] }
+            case 3:
+                // Type 4 draws in short overlapping pieces; a piece touching the line's end continues it.
+                let p = try take(2, &i2, 6)
+                let start = InkPoint(point: CGPoint(x: p[0], y: p[1]), radius: max(0.05, p[4])), end = InkPoint(point: CGPoint(x: p[2], y: p[3]), radius: max(0.05, p[5]))
+                if let last = line.last, hypot(last.point.x - start.point.x, last.point.y - start.point.y) <= max(1, last.radius * 1.5) {
+                    line.append(start); line.append(end)
+                } else { if !line.isEmpty { lines.append(line) }; line = [start, end] }
+            default: throw NotebookError.invalid("Unbekannter variabler Strichbefehl.")
+            }
+        }
+        if !line.isEmpty { lines.append(line) }
+        return type == 4 ? joined(lines) : lines
+    }
+    /// Type 4 lines alternate between a dot and the piece leaving it; lines that touch are merged so a
+    /// translucent highlighter does not darken where its pieces overlap.
+    static func joined(_ lines: [[InkPoint]]) -> [[InkPoint]] {
+        var result: [[InkPoint]] = []
+        for line in lines {
+            if let last = result.last?.last, let first = line.first, hypot(last.point.x - first.point.x, last.point.y - first.point.y) <= max(1, max(last.radius, first.radius) * 1.5) {
+                result[result.count - 1] += line
+            } else { result.append(line) }
+        }
+        return result
+    }
+
+    static func editableStroke(_ line: [InkPoint], offset: CGAffineTransform, color: UIColor, marker: Bool, variable: Bool, date: Date) -> PKStroke? {
+        var points = line.filter { $0.point.x.isFinite && $0.point.y.isFinite && $0.radius.isFinite }
+        guard let first = points.first else { return nil }
+        if points.count == 1 { points.append(InkPoint(point: CGPoint(x: first.point.x + 0.01, y: first.point.y), radius: first.radius)) }
+        let ink = PKInk(marker ? .marker : (variable ? .pen : .monoline), color: color)
+        let controls = points.enumerated().map { index, p in
+            let width = max(0.1, min(400, p.radius * 2))
+            return PKStrokePoint(location: p.point.applying(offset), timeOffset: TimeInterval(index) / 240, size: CGSize(width: width, height: width), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        return PKStroke(ink: ink, path: PKStrokePath(controlPoints: controls, creationDate: date))
     }
     // Observed flattened arrays from 0x101f87f24 / 0x101f88874.
     // Arc parameter interpretation is provisional until validated against iPad rendering.

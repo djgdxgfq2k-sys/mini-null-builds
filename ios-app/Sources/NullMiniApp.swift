@@ -23,10 +23,19 @@ import UIKit
 @MainActor struct RootView: View {
     @EnvironmentObject private var store: LibraryStore
     var body: some View {
-        Group {
-            if let item = store.item(store.active) { EditorView(bookID:item.id).id(item.id) }
-            else { LibraryView() }
+        ZStack {
+            // The library stays alive under an open notebook, so closing it returns to the same folder and scroll position.
+            LibraryView()
+                .scaleEffect(store.active == nil ? 1 : 0.97)
+                .allowsHitTesting(store.active == nil).accessibilityHidden(store.active != nil)
+            if let item = store.item(store.active) {
+                // Opening zooms the notebook out of the card that was tapped, closing zooms it back.
+                EditorView(bookID:item.id).id(item.id)
+                    .transition(.scale(scale: 0.12, anchor: store.openAnchor).combined(with: .opacity))
+                    .zIndex(1)
+            }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: store.active)
         .alert("Hinweis",isPresented:Binding(get:{ store.error != nil },set:{ if !$0 {store.error = nil} })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }
 }

@@ -79,7 +79,7 @@ struct LibraryLayoutMenu: View {
 
 private extension View {
     func libraryMenuSurface() -> some View {
-        self.font(.system(size: 13)).foregroundStyle(.white).buttonStyle(.plain).frame(width: 224)
+        self.font(.system(size: 13)).foregroundStyle(.white).buttonStyle(.solidPlain).frame(width: 224)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26))
             .overlay { RoundedRectangle(cornerRadius: 26).stroke(.white.opacity(0.14), lineWidth: 0.5) }
             .shadow(color: .black.opacity(0.2), radius: 16, y: 8)

@@ -51,6 +51,6 @@ struct PageContextPopover: View {
                 if item != .copy && item != .trash { Divider().overlay(Theme.border.opacity(0.45)).padding(.leading, 52).padding(.trailing, 16) }
             }
         }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 28)).padding(17).frame(width: 278)
-            .background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+            .background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
     }
 }

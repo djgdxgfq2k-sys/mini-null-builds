@@ -31,7 +31,7 @@ struct NewDocumentPopover: View {
                 row("Foto aufnehmen", asset: "newDocumentPopover/take-photo", action: camera).disabled(!canUseCamera)
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 14))
             row("Ordner", asset: "newDocumentPopover/folder", action: folder).background(Theme.pill, in: RoundedRectangle(cornerRadius: 14))
-        }.padding(12).frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.padding(12).frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
     }
     private func tile(_ title: String, asset: String, badge: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {

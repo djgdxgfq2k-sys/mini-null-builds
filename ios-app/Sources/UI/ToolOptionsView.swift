@@ -26,7 +26,7 @@ import SwiftUI
             Text(title).font(.system(size: 17, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 64)
                 .background(LinearGradient(stops: [.init(color: Theme.popover, location: 0), .init(color: Theme.popover, location: 0.7), .init(color: Theme.popover.opacity(0), location: 1)], startPoint: .top, endPoint: .bottom))
         }.frame(width: Self.panelSize(for: tool).width, height: Self.panelSize(for: tool).height)
-            .foregroundStyle(.white).background(Theme.popover).tint(Theme.accent).buttonStyle(.plain)
+            .foregroundStyle(.white).background(Theme.popover).tint(Theme.accent).buttonStyle(.solidPlain)
             .presentationBackground(Theme.popover).presentationCompactAdaptation(.popover)
             .sheet(isPresented: $managingStyles) { QuickStyleManager(store: quickStyles, settings: $settings) }
     }

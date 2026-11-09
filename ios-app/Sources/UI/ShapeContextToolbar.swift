@@ -43,7 +43,7 @@ struct StrokeOptionsPopover: View {
                 Text(String(format: "%.2f mm", locale: Locale(identifier: "de_DE"), Double(settings.width / 2.83464567))).font(.system(size: 11)).frame(width: 64, alignment: .leading)
                 ReferenceSlider(value: Binding(get: { Double(settings.width / 2.83464567) }, set: { value in settings.width = CGFloat(value) * 2.83464567; if let presetIndex, settings.widthPresets.indices.contains(presetIndex) { settings.widthPresets[presetIndex] = settings.width } }), range: 0.05...3, tapered: true)
             }.padding(.horizontal, 27).frame(height: 44).padding(.top, 8).padding(.bottom, 20)
-        }.frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
     }
 }
 

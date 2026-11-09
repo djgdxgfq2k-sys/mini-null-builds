@@ -22,7 +22,7 @@ struct EraserContextToolbar: View {
                         .offset(x: index == 2 ? 2 : 0).frame(width: [44.0, 60.0, 84.0][index], height: 45)
                 }.accessibilityLabel(["Kleiner Radierer", "Mittlerer Radierer", "Großer Radierer"][index]).accessibilityAddTraits(settings.eraserSize == index ? .isSelected : [])
             }
-        }.padding(.horizontal, 4).frame(width: 362, height: 45).foregroundStyle(.white).buttonStyle(.plain).clipped()
+        }.padding(.horizontal, 4).frame(width: 362, height: 45).foregroundStyle(.white).buttonStyle(.solidPlain).clipped()
     }
 }
 
@@ -47,7 +47,7 @@ struct EraserAdvancedOptions: View {
                 Button { settings.pencilConnected.toggle(); settings.finger = !settings.pencilConnected } label: { row(settings.pencilConnected ? "Apple Pencil trennen" : "Apple Pencil verbinden") }
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 32)).padding(.horizontal, 16).padding(.top, 14)
             Spacer(minLength: 0)
-        }.font(.system(size: 15)).foregroundStyle(.white).tint(Color(referenceHex: "#51B27C")).buttonStyle(.plain).frame(width: 393, height: 588).background(.black).presentationBackground(.black).presentationCompactAdaptation(.popover)
+        }.font(.system(size: 15)).foregroundStyle(.white).tint(Color(referenceHex: "#51B27C")).buttonStyle(.solidPlain).frame(width: 393, height: 588).background(.black).presentationBackground(.black).presentationCompactAdaptation(.popover)
     }
     private func filter(_ title: String, asset: String, value: Binding<Bool>) -> some View {
         HStack(spacing: 12) { OriginalIcon(name: "newToolbar/writing_tools/tools/" + asset, size: 24); Toggle(title, isOn: value) }.padding(.horizontal, 16).frame(height: 52)

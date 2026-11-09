@@ -393,7 +393,7 @@ final class PaperView: UIView {
             c.restoreGState()
         } else { Self.paint(c, bounds: bounds, paper: page.paper) }
     }
-    static func paint(_ c: CGContext, bounds: CGRect, paper: String) {
+    nonisolated static func paint(_ c: CGContext, bounds: CGRect, paper: String) {
         guard paper != "blank" else { return }
         // Pattern geometry from the supplied GNDynamicTemplates bundle.
         c.setStrokeColor(UIColor(hex: "#D0D2D3").cgColor); c.setLineWidth(0.5)

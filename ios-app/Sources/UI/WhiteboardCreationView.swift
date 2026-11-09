@@ -99,7 +99,7 @@ struct WhiteboardCreationView: View {
                     }
                 }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 30)
             }.scrollIndicators(.hidden)
-        }.foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCornerRadius(34).preferredColorScheme(.dark).modifier(ReferenceFormSizing()).buttonStyle(.plain)
+        }.foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCornerRadius(34).preferredColorScheme(.dark).modifier(ReferenceFormSizing()).buttonStyle(.solidPlain)
     }
     private var chevron: some View { Image(systemName: "chevron.down").font(.system(size: 12)).foregroundStyle(Theme.secondary) }
 }

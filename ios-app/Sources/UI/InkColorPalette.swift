@@ -77,7 +77,7 @@ import SwiftUI
                     ReferenceSlider(value: $settings.fillOpacity).frame(height: 32)
                 }.font(.system(size: 14)).padding(.horizontal, 36).padding(.top, 17).padding(.bottom, 24)
             }
-        }.frame(width: 410).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.plain)
+        }.frame(width: 410).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
             .sheet(isPresented: $customSheet) {
                 NavigationStack {
                     Form { ColorPicker("Farbe", selection: $custom, supportsOpacity: false) }.goodnotesSheet().navigationTitle("Eigene Farbe")
