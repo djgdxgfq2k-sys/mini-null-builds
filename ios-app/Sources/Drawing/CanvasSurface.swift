@@ -272,11 +272,19 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width * scale)
             }
         }
-        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; toolStart = canvasView.drawing; viewport?.showLiveInk(true); commands?.target = self; onActivate?() }
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; restyleIfReady(); pendingRestyle = nil; toolStart = canvasView.drawing; viewport?.showLiveInk(true); commands?.target = self; onActivate?() }
         private var toolStart: PKDrawing?
         /// Replaces the strokes PencilKit just wrote with the Goodnotes-style pens built from the same
         /// samples (fountain pen width by speed, pencil grain, tape strips, held shapes, ruler edges).
-        func restyleNewStrokes(since start: PKDrawing) {
+        /// The stroke PencilKit is finishing: its start drawing and when the Pencil lifted. PencilKit adds
+        /// the stroke to the drawing around the end-of-tool callback, in either order, so both paths try.
+        private var pendingRestyle: (start: PKDrawing, lifted: Date)?
+        private func restyleIfReady() {
+            guard let pending = pendingRestyle, let canvas, canvas.drawing.strokes.count > pending.start.strokes.count else { return }
+            pendingRestyle = nil
+            restyleNewStrokes(since: pending.start, lifted: pending.lifted)
+        }
+        func restyleNewStrokes(since start: PKDrawing, lifted: Date = Date()) {
             guard let canvas, writable, let settings = currentSettings, !settings.appleInk || settings.tape,
                   [.pen, .pencil, .marker, .shapes].contains(settings.tool) else { return }
             let now = canvas.drawing
@@ -299,12 +307,14 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                               altitude: p.altitude > 0 ? p.altitude : .pi / 2, azimuth: p.azimuth)
                 }
                 if samples.count == 1 { samples.append(samples[0]) }
-                // Draw-and-hold: the Pencil rested at the end of the stroke.
+                // Draw-and-hold: the Pencil rested at the end of the stroke. PencilKit records no points while
+                // the Pencil stands still, so the rest is the gap between the last point and the lift.
                 var shape: RecognizedShape?
                 if (settings.drawAndHold || (settings.tool == .shapes && settings.holdForShapes)) || (settings.tool == .shapes && !settings.holdForShapes),
                    let end = samples.last {
                     let rest = samples.reversed().prefix { hypot($0.point.x - end.point.x, $0.point.y - end.point.y) < 3 }
-                    let held = (rest.first?.time ?? 0) - (rest.last?.time ?? 0) >= 0.5
+                    let still = lifted.timeIntervalSince(stroke.path.creationDate.addingTimeInterval(end.time))
+                    let held = still >= 0.45 || (rest.first?.time ?? 0) - (rest.last?.time ?? 0) >= 0.5
                     if held || (settings.tool == .shapes && !settings.holdForShapes) {
                         shape = ShapeRecognition.recognize(samples.map(\.point)).map { settings.roundedShapes ? (viewport?.inkInput.snapShape?($0) ?? $0) : $0 }
                     }
@@ -325,6 +335,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
             drawing = canvasView.drawing
             viewport?.inkDetail.update(drawing)
+            if !usingTool, pendingRestyle != nil { DispatchQueue.main.async { [weak self] in self?.restyleIfReady() } }
             // While a tool is in use PencilKit reports every small change; writing the whole page to disk
             // each time made erasing stutter. Save once the tool lifts, or shortly after a burst of changes.
             if filteredEraseBefore == nil { if usingTool { schedulePersist() } else { persist() } }
@@ -337,6 +348,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            if let start = toolStart { toolStart = nil; pendingRestyle = (start, Date()) }
             drawing = canvasView.drawing; persist()
             finishToolUse()
         }
@@ -347,7 +359,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.inputGeneration == generation else { return }
                 self.usingTool = false
-                if let start = self.toolStart { self.toolStart = nil; self.restyleNewStrokes(since: start) }
+                self.restyleIfReady()
                 self.viewport?.showLiveInk(false)
                 let pending = self.queued; self.queued.removeAll()
                 for action in pending { action() }
