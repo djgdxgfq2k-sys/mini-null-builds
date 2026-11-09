@@ -35,7 +35,7 @@ import UIKit
         let view = PageViewport(page: page, directory: root); coordinator.attach(view)
         var settings = ToolSettings(); settings.tool = .shapes; settings.fillShapes = true; settings.color = "#FF0000"
         coordinator.configure(settings)
-        XCTAssertFalse(view.inkInput.isHidden); XCTAssertTrue(view.interaction.isHidden)
+        XCTAssertTrue(view.inkInput.enabled); XCTAssertTrue(view.interaction.isHidden)
         let points = GeometricShape.rectangle.points(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 200, y: 180), samples: [])
         view.inkInput.beginStroke(InkSample(point: points[0], time: 0))
         view.inkInput.addSamples(points.dropFirst().enumerated().map { InkSample(point: $0.element, time: Double($0.offset + 1) / 120) })
