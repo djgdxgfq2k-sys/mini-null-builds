@@ -166,6 +166,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             viewport = view; canvas = view.canvas
             // Only initialization assigns persisted state; the delegate is installed afterwards.
             view.canvas.drawing = drawing
+            view.inkDetail.update(drawing)
             view.canvas.delegate = self
             view.canvas.isUserInteractionEnabled = writable
             commands?.target = self
@@ -271,7 +272,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width * scale)
             }
         }
-        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; toolStart = canvasView.drawing; commands?.target = self; onActivate?() }
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; toolStart = canvasView.drawing; viewport?.showLiveInk(true); commands?.target = self; onActivate?() }
         private var toolStart: PKDrawing?
         /// Replaces the strokes PencilKit just wrote with the Goodnotes-style pens built from the same
         /// samples (fountain pen width by speed, pencil grain, tape strips, held shapes, ruler edges).
@@ -323,6 +324,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
             drawing = canvasView.drawing
+            viewport?.inkDetail.update(drawing)
             // While a tool is in use PencilKit reports every small change; writing the whole page to disk
             // each time made erasing stutter. Save once the tool lifts, or shortly after a burst of changes.
             if filteredEraseBefore == nil { if usingTool { schedulePersist() } else { persist() } }
@@ -346,6 +348,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 guard let self, self.inputGeneration == generation else { return }
                 self.usingTool = false
                 if let start = self.toolStart { self.toolStart = nil; self.restyleNewStrokes(since: start) }
+                self.viewport?.showLiveInk(false)
                 let pending = self.queued; self.queued.removeAll()
                 for action in pending { action() }
                 if erasing { self.commands?.didFinishErasing?() }
@@ -376,7 +379,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         private func replaceByUserCommand(_ next: PKDrawing, canvas: PKCanvasView) {
             let before = drawing
             registerUndo(before, canvas: canvas)
-            drawing = next; canvas.drawing = next; persist(); commands?.refreshUndo()
+            drawing = next; canvas.drawing = next; viewport?.inkDetail.update(next); persist(); commands?.refreshUndo()
         }
         private func registerUndo(_ before: PKDrawing, canvas: PKCanvasView) {
             canvas.undoManager?.registerUndo(withTarget: self) { target in
@@ -554,6 +557,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         canvas.overrideUserInterfaceStyle = .light
         canvas.isScrollEnabled = false; canvas.minimumZoomScale = 1; canvas.maximumZoomScale = 1
         document.addSubview(canvas)
+        inkDetail.frame = document.bounds; inkDetail.isHidden = true; document.addSubview(inkDetail)
         inkInput.frame = document.bounds; inkInput.managedUndo = canvas.undoManager; document.addSubview(inkInput)
         interaction.frame = document.bounds; interaction.backgroundColor = .clear; interaction.isHidden = true; document.addSubview(interaction)
         lasso.frame = document.bounds; lasso.isHidden = true; document.addSubview(lasso)
@@ -584,6 +588,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         document.center = CGPoint(x: content.bounds.midX, y: content.bounds.midY)
         document.transform = CGAffineTransform(rotationAngle: CGFloat(page.quarterTurns) * .pi / 2)
         original.frame = document.bounds; inkInput.frame = document.bounds; interaction.frame = document.bounds; lasso.frame = document.bounds
+        inkDetail.frame = document.bounds
         layoutCanvas()
         if let paper = document.subviews.first as? PaperView { paper.page = page; paper.frame = document.bounds; paper.setNeedsDisplay() }
         scroll.contentSize = CGSize(width: page.size.width * scroll.zoomScale, height: page.size.height * scroll.zoomScale)
@@ -604,8 +609,27 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         let longest = max(1, max(document.bounds.width, document.bounds.height) * (window?.screen.scale ?? 2))
         let budget = max(1, (8192 / longest * 4).rounded(.down) / 4)
         let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        wantedScale = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        updateInkDetail()
         guard target != renderScale else { return }
         renderScale = target; layoutCanvas(); onRenderScale?()
+    }
+    /// Beyond PencilKit's pixel budget the committed ink is shown by tiles rendered at the full zoom;
+    /// the canvas underneath stays (nearly invisible) to take the Pencil and shows live ink while writing.
+    let inkDetail = InkDetailView()
+    private var wantedScale: CGFloat = 1
+    private var writing = false
+    private func updateInkDetail() {
+        let sharpOverlay = wantedScale > renderScale + 0.01 && !writing
+        inkDetail.isHidden = !sharpOverlay
+        canvas.alpha = sharpOverlay ? 0.02 : 1
+    }
+    func showLiveInk(_ live: Bool) {
+        guard live != writing else { return }
+        writing = live
+        if live { updateInkDetail(); return }
+        // Let the sharp tiles catch up before the canvas fades back under them.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in if self?.writing == false { self?.updateInkDetail() } }
     }
     var onRenderScale: (() -> Void)?
     /// The canvas is laid out `renderScale` times larger, zoomed by the same factor and shrunk back
@@ -789,5 +813,31 @@ enum PencilKitZoom {
         let ratio = widths[widths.count / 2] / toolWidth
         // Dividing stores about 1/scale of the tool width; not dividing stores about the tool width.
         dividesByZoom = ratio < (1 + 1 / renderScale) / 2
+    }
+}
+
+/// Committed ink drawn in tiles at the exact on-screen zoom, for zooms beyond what the PencilKit canvas renders.
+final class InkDetailView: UIView {
+    override class var layerClass: AnyClass { SharpTiledLayer.self }
+    private let lock = NSLock()
+    private var drawing = PKDrawing()
+    private var dirty = false
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false; overrideUserInterfaceStyle = .light
+        if let tiled = layer as? CATiledLayer { tiled.levelsOfDetail = 5; tiled.levelsOfDetailBias = 4; tiled.tileSize = CGSize(width: 512, height: 512) }
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(_ next: PKDrawing) {
+        lock.lock(); drawing = next; lock.unlock()
+        if isHidden { dirty = true } else { setNeedsDisplay() }
+    }
+    override var isHidden: Bool { didSet { if !isHidden && dirty { dirty = false; setNeedsDisplay() } } }
+    override func draw(_ rect: CGRect) {
+        guard let c = UIGraphicsGetCurrentContext() else { return }
+        lock.lock(); let ink = drawing; lock.unlock()
+        guard !ink.strokes.isEmpty, ink.bounds.intersects(rect) else { return }
+        let scale = max(1, min(40, hypot(c.ctm.a, c.ctm.b)))
+        ink.paperImage(from: rect, scale: scale).draw(in: rect)
     }
 }
