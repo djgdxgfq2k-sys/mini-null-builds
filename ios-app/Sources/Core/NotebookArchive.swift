@@ -89,27 +89,31 @@ enum NotebookArchive {
                 guard let schemaData = files["schema.pb"], let notesIndex = files["index.notes.pb"] else { throw NotebookError.invalid("Kein unterstütztes Notizarchiv.") }
                 let schema = try WireMessage(schemaData)[1]?.integer ?? 0
                 guard schema > 0 else { throw NotebookError.invalid("Archiv-Schema fehlt.") }
-                item.warnings.append("Originalarchiv bleibt unverändert. Die Vektordarstellung und Seitenzuordnung dieses Schemas sind noch nicht vollständig validiert.")
-                let records = try WireMessage.records(notesIndex)
-                let events = try WireMessage.records(files["index.events.pb"] ?? Data())
-                var templates: [(String, String?, CGSize)] = []
-                for event in events {
-                    guard let e = try event[2]?.message(), let id = e[2]?.string, let sz = try e[8]?.message(), let w = sz[1]?.float, let h = sz[2]?.float, w > 0, h > 0, w <= 100000, h <= 100000 else { continue }
-                    templates.append((id, e[4]?.string, CGSize(width: w, height: h)))
-                }
-                for row in records {
-                    guard let key = row[1]?.string, let path = row[2]?.string, let data = files[path] else { throw NotebookError.invalid("Notizdaten fehlen.") }
-                    let exact = templates.first { $0.0 == key }
-                    let template = exact ?? (templates.count == 1 ? templates.first : nil)
-                    var page = NotebookPage(sourceNotes: path, paper: "blank")
-                    if let size = template?.2 { page.width = size.width; page.height = size.height }
-                    if let attachment = template?.1, let pdfData = files["attachments/" + attachment], pdfData.starts(with: Data("%PDF".utf8)) {
-                        let name = page.id + ".pdf"; try pdfData.write(to: directory.appendingPathComponent(name), options: .atomic); page.pdf = name
+                _ = notesIndex
+                // Each background PDF is stored once and shared by every page that shows one of its pages.
+                var written: [String: (name: String, pages: Int)] = [:]
+                var unsupported = 0
+                for layout in try GoodnotesLayout.pages(files) {
+                    var page = NotebookPage(sourceNotes: layout.notesPath, paper: "blank")
+                    if let size = layout.size { page.width = size.width; page.height = size.height }
+                    if let background = layout.background, let pdfData = files[background] {
+                        if written[background] == nil {
+                            let name = UUID().uuidString + ".pdf"
+                            try pdfData.write(to: directory.appendingPathComponent(name), options: .atomic)
+                            written[background] = (name, PDFDocument(data: pdfData)?.pageCount ?? 0)
+                        }
+                        if let pdf = written[background], pdf.pages > 0 {
+                            page.pdf = pdf.name; page.pdfPage = min(layout.backgroundPage, pdf.pages - 1)
+                            if layout.size == nil, let box = PDFDocument(data: pdfData)?.page(at: page.pdfPage)?.bounds(for: .cropBox).size, box.width > 0, box.height > 0 {
+                                page.width = box.width; page.height = box.height
+                            }
+                        }
                     }
-                    let ink = try OriginalInk.read(data)
-                    if ink.unsupported > 0 { item.warnings.append("\(ink.unsupported) Spezialstriche auf Seite \(item.pages.count + 1) werden als Originaldaten aufbewahrt; Darstellung noch unbestätigt.") }
+                    // A page whose strokes cannot all be read still imports; unreadable strokes stay in the original archive.
+                    if let data = files[layout.notesPath], let ink = try? OriginalInk.read(data) { unsupported += ink.unsupported } else { unsupported += 1 }
                     item.pages.append(page)
                 }
+                if unsupported > 0 { item.warnings.append("\(unsupported) besondere Elemente (z. B. Bilder oder Spezialstifte) werden noch nicht angezeigt, bleiben aber im Original erhalten.") }
                 guard !item.pages.isEmpty else { throw NotebookError.invalid("Keine lesbaren Seiten gefunden.") }
                 item.originalName = url.lastPathComponent
                 try Data(contentsOf: url).write(to: directory.appendingPathComponent("original.goodnotes"), options: .atomic)
@@ -119,9 +123,20 @@ enum NotebookArchive {
     }
     static func originalInk(page: NotebookPage, directory: URL) throws -> OriginalInk {
         guard let path = page.sourceNotes else { return OriginalInk() }
-        let files = try entries(directory.appendingPathComponent("original.goodnotes"))
-        guard let data = files[path] else { throw NotebookError.invalid("Originale Striche fehlen.") }
-        return try OriginalInk.read(data)
+        return try OriginalInk.read(entry(path, in: directory.appendingPathComponent("original.goodnotes")))
+    }
+    /// One member of an archive, with the same safety checks as `entries`, without unpacking the rest.
+    static func entry(_ path: String, in url: URL) throws -> Data {
+        let archive = try Archive(url: url, accessMode: .read)
+        guard let entry = archive[path], entry.type == .file else { throw NotebookError.invalid("Originale Striche fehlen.") }
+        guard UInt64(entry.uncompressedSize) <= UInt64(maxEntry) else { throw NotebookError.invalid("ZIP-Eintrag ist zu groß.") }
+        var data = Data()
+        let checksum = try archive.extract(entry) { part in
+            guard data.count <= maxEntry - part.count else { throw NotebookError.invalid("ZIP-Eintrag ist zu groß.") }
+            data.append(part)
+        }
+        guard checksum == entry.checksum, UInt64(data.count) == entry.uncompressedSize else { throw NotebookError.invalid("ZIP-Prüfsumme stimmt nicht überein.") }
+        return data
     }
     static func exportNative(item: LibraryItem, directory: URL, to url: URL) throws {
         var files = ["nullmini/manifest.json": try JSONEncoder().encode(ArchiveManifest(item: item))]

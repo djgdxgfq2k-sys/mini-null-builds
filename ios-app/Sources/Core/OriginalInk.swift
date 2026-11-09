@@ -13,7 +13,8 @@ struct OriginalInk {
         var result = OriginalInk()
         for record in try WireMessage.records(data) {
             guard let field = record[7] else { continue }
-            let m = try field.message()
+            // Some elements under field 7 are not stroke messages; count them instead of failing the page.
+            guard let m = try? field.message() else { result.unsupported += 1; continue }
             guard let compressed = m[2]?.data else { continue }
             do {
                 let raw = try AppleLZ4.decode(compressed)

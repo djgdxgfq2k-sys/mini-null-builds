@@ -210,8 +210,19 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 }
                 self.filteredEraseBefore = nil; self.filteredEraseChanged = false; self.cancelledInput = true
             }
-            do { view.original.ink = try NotebookArchive.originalInk(page: page, directory: directory) }
-            catch { commands?.reportError("Originalebene nicht lesbar: \(error.localizedDescription)") }
+            // Imported Goodnotes strokes load off the main thread so scrolling never waits on unzipping.
+            if page.sourceNotes != nil {
+                let source = page, folder = directory
+                DispatchQueue.global(qos: .userInitiated).async { [weak view, weak self] in
+                    let result = Result { try NotebookArchive.originalInk(page: source, directory: folder) }
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success(let ink): view?.original.ink = ink
+                        case .failure(let error): self?.commands?.reportError("Originalebene nicht lesbar: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
         }
         func configure(_ settings: ToolSettings) {
             guard settings != currentSettings, let canvas else { return }
@@ -349,13 +360,21 @@ final class PaperView: UIView {
     }
     init(page: NotebookPage, directory: URL) {
         self.page = page; tilePage = page
-        pdf = page.pdf.flatMap { PDFDocument(url: directory.appendingPathComponent($0)) }
+        pdf = page.pdf.flatMap { Self.document(directory.appendingPathComponent($0)) }
         super.init(frame: CGRect(origin: .zero, size: page.nativeSize)); backgroundColor = .white
         contentMode = .redraw
         detail.frame = bounds; addSubview(detail)
     }
     override func setNeedsDisplay() { super.setNeedsDisplay(); detail.setNeedsDisplay() }
     required init?(coder: NSCoder) { nil }
+    /// Imported notebooks share one background PDF across many pages; open each file only once.
+    private static let documents = NSCache<NSURL, PDFDocument>()
+    private static let pdfLock = NSLock()
+    private static func document(_ url: URL) -> PDFDocument? {
+        if let cached = documents.object(forKey: url as NSURL) { return cached }
+        guard let document = PDFDocument(url: url) else { return nil }
+        documents.setObject(document, forKey: url as NSURL); return document
+    }
     override func draw(_ rect: CGRect) {
         guard let c = UIGraphicsGetCurrentContext() else { return }
         let page = page, bounds = bounds
@@ -368,7 +387,10 @@ final class PaperView: UIView {
             let box = p.bounds(for: .cropBox)
             guard box.width > 0, box.height > 0 else { c.restoreGState(); return }
             c.scaleBy(x: bounds.width / box.width, y: bounds.height / box.height)
-            c.translateBy(x: -box.minX, y: -box.minY); p.draw(with: .cropBox, to: c); c.restoreGState()
+            // Pages share PDF documents and tiles render on several threads; PDFKit draws one at a time.
+            c.translateBy(x: -box.minX, y: -box.minY)
+            Self.pdfLock.lock(); p.draw(with: .cropBox, to: c); Self.pdfLock.unlock()
+            c.restoreGState()
         } else { Self.paint(c, bounds: bounds, paper: page.paper) }
     }
     static func paint(_ c: CGContext, bounds: CGRect, paper: String) {
