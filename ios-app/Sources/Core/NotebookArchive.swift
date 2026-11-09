@@ -191,7 +191,11 @@ enum NotebookArchive {
                 // PencilKit public image API; source drawing stays vector data in .nullmini.
                 let imageScale = min(3,4096/max(bounds.width,bounds.height))
                 drawings[page.id]?.paperImage(from: bounds, scale: imageScale).draw(in: bounds)
-                for box in texts[page.id] ?? [] { (box.text as NSString).draw(in:CGRect(x:box.x+5,y:box.y+8,width:max(1,box.width-10),height:box.height),withAttributes:[.font:UIFont.systemFont(ofSize:20),.foregroundColor:UIColor(hex:"#1E1B1B")]) }
+                for box in texts[page.id] ?? [] {
+                if let color = box.color { UIColor(hex: color).setFill(); UIRectFill(CGRect(x: box.x, y: box.y, width: box.width, height: box.height)) }
+                let inset = box.color == nil ? UIEdgeInsets(top: 8, left: 5, bottom: 0, right: 5) : TextBox.stickyInset
+                (box.text as NSString).draw(in: CGRect(x: box.x + inset.left, y: box.y + inset.top, width: max(1, box.width - inset.left - inset.right), height: box.height - inset.top), withAttributes: [.font: UIFont.systemFont(ofSize: box.color == nil ? 20 : TextBox.stickyFont), .foregroundColor: UIColor(hex: "#1E1B1B")])
+            }
                 c.restoreGState()
             }
         }

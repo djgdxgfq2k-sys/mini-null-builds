@@ -160,6 +160,7 @@ import PDFKit
     }
     private var toolbar: some View {
         GeometryReader { geometry in
+            // A Pencil tap drifts a little; a scroll view that cannot scroll must not swallow it as a pan.
             ScrollView(.horizontal, showsIndicators: false) {
                 ZStack {
                     HStack(spacing: 0) {
@@ -175,7 +176,7 @@ import PDFKit
                             .popover(isPresented: $sharing) { ExportPopover(exportPage: { sharing = false; export(.pdf, currentPage: true) }, exportAll: { sharing = false; export(.pdf) }, exportNative: { sharing = false; export(.native) }, exportOriginal: item?.originalName == nil ? nil : { sharing = false; export(.original) }, printDocument: { sharing = false; printDocument() }) }
                         Button { moreDocument.toggle() } label: { OriginalIcon(name: "navbar/more-circle", size: 36).frame(width: 44, height: 44) }.accessibilityLabel("Mehr")
                             .popover(isPresented: $moreDocument) {
-                                DocumentMorePopover(pageNumber: pageIndex + 1, bookmarked: page?.bookmarked == true, bookmark: { bookmark() }, rename: { moreDocument = false; newTitle = item?.title ?? ""; renaming = true }, changeTemplate: { paper in changeTemplate(paper); moreDocument = false }, readOnly: $settings.readOnly, finger: $settings.finger, report: { moreDocument = false; panel = .report }, pageCount: item?.pages.count ?? 1, page: page, directory: store.directory(bookID), pageAction: { action in moreDocument = false; handlePageAction(action, index: pageIndex) }, rotatePage: rotatePage, goToPage: { index in moreDocument = false; commands.afterInput { pageIndex = min(max(0, index), max(0, (item?.pages.count ?? 1) - 1)) } })
+                                DocumentMorePopover(pageNumber: pageIndex + 1, bookmarked: page?.bookmarked == true, bookmark: { bookmark() }, rename: { moreDocument = false; newTitle = item?.title ?? ""; renaming = true }, changeTemplate: { paper in changeTemplate(paper); moreDocument = false }, readOnly: $settings.readOnly, finger: $settings.finger, report: { moreDocument = false; panel = .report }, pageCount: item?.pages.count ?? 1, page: page, directory: store.directory(bookID), pageAction: { action in moreDocument = false; handlePageAction(action, index: pageIndex) }, rotatePage: rotatePage, goToPage: { index in moreDocument = false; commands.afterInput { pageIndex = min(max(0, index), max(0, (item?.pages.count ?? 1) - 1)) } }, clearObjects: { kind in moreDocument = false; commands.clear(kind) })
                             }
                     }
                     HStack(spacing: 0) {
@@ -188,7 +189,7 @@ import PDFKit
                         mainTool(.elements, name: "newToolbar/element")
                         toolbarAction("newToolbar/image", "Bilder") { if let page { pageMedia = PageMediaRequest(kind: .photos, anchorID: page.id, position: 1) } }
                         if settings.toolbarTools.contains(.geometry) { mainTool(.geometry, name: "newToolbar/shapes") }
-                        toolbarAction("newToolbar/sticky_note", "Notizzettel") {}.disabled(true)
+                        toolbarAction("newToolbar/sticky_note", "Notizzettel") { settings.readOnly = false; settings.tool = .text; DispatchQueue.main.async { commands.addStickyNote() } }
                         if settings.toolbarTools.contains(.laser) { mainTool(.laser, name: "newToolbar/laser_pointer") }
                         toolbarDivider
                         iconButton("mediaAndDevices/microphone-01", "Aufnahmen") { panel = .audio }
@@ -204,7 +205,7 @@ import PDFKit
                         Color.clear.frame(width: 3, height: 44).allowsHitTesting(false)
                     }.frame(height: 44)
                 }.frame(width: max(850, geometry.size.width), height: 44)
-            }
+            }.scrollBounceBehavior(.basedOnSize, axes: .horizontal).scrollDisabled(geometry.size.width >= 850)
         }.frame(height: ReferenceLayout.toolbar).background(Theme.toolbar).foregroundStyle(.white)
             .animation(EditorMotion.selection, value: settings.tool)
     }
@@ -255,8 +256,10 @@ import PDFKit
                 writingSlot(.pen, label: "Stift").padding(.leading, 2)
                 writingSlot(.pencil, label: "Bleistift")
                 writingSlot(.marker, label: "Textmarker")
-                WritingToolIcon(base: "newToolbar/writing_tools/tools/tape", selected: false, color: settings.color, colorLayer: "")
-                    .frame(width: 44, height: 45).opacity(0.45).accessibilityLabel("Klebeband (nicht verfügbar)")
+                Button { toolPopover = nil; settings.tool = .marker; settings.tape = true } label: {
+                    WritingToolIcon(base: "newToolbar/writing_tools/tools/tape", selected: tapeSelected, color: settings.tapeColor, colorLayer: "")
+                        .frame(width: 44, height: 36).background(tapeSelected ? Color(referenceHex: "#4D8292") : .clear, in: RoundedRectangle(cornerRadius: 11)).frame(height: 45)
+                }.accessibilityLabel("Klebeband").accessibilityAddTraits(tapeSelected ? .isSelected : [])
                 writingSlot(.shapes, label: "Draw Shape")
                 Rectangle().fill(Theme.border).frame(width: 0.5, height: 28).padding(.horizontal, 4)
                 ForEach(settings.widthPresets.indices, id: \.self) { index in
@@ -283,9 +286,10 @@ import PDFKit
             .popover(isPresented: $colorPopover) { InkColorPalette(settings: $settings) }
     }
     private var contextColors: [String] { Theme.inks.contains(settings.color) ? Theme.inks : [settings.color] + Theme.inks }
+    private var tapeSelected: Bool { settings.tool == .marker && settings.tape }
     private func writingSlot(_ tool: EditorTool, label: String) -> some View {
-        let selected = settings.tool == tool
-        return Button { if selected { toolPopover = tool } else { toolPopover = nil; settings.tool = tool } } label: {
+        let selected = settings.tool == tool && !(tool == .marker && settings.tape)
+        return Button { if selected { toolPopover = tool } else { toolPopover = nil; settings.tape = false; settings.tool = tool } } label: {
             HStack(spacing: 0) {
                 WritingToolIcon(base: writingArtwork(tool), selected: selected, color: settings.color, colorLayer: writingColorLayer(tool))
                 if selected { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 10) }

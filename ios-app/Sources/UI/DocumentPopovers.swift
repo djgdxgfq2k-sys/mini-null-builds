@@ -81,6 +81,7 @@ struct DocumentMorePopover: View {
     var pageAction: (PageMenuAction) -> Void = { _ in }
     var rotatePage: (Int) -> Void = { _ in }
     var goToPage: (Int) -> Void = { _ in }
+    var clearObjects: (ClearKind) -> Void = { _ in }
     @State private var goingToPage = false
     @State private var pageInput = ""
     var body: some View {
@@ -111,7 +112,7 @@ struct DocumentMorePopover: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Seite leeren oder löschen").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.secondary).padding(.horizontal, 15)
                         VStack(spacing: 0) {
-                            rowLabel("Bestimmte Objekte löschen", asset: "object-clear", chevron: true).opacity(0.4)
+                            Menu { ForEach(ClearKind.allCases) { kind in Button(kind.rawValue, role: .destructive) { clearObjects(kind) } } } label: { rowLabel("Bestimmte Objekte löschen", asset: "object-clear", chevron: true) }
                             divider()
                             Button { pageAction(.clear) } label: { rowLabel("Seite leeren", asset: "files/file-x-03", catalog: OriginalAssets.icons) }.foregroundStyle(Color(hex: Theme.inks[0]))
                             divider()

@@ -76,6 +76,9 @@ struct ToolSettings: Equatable, Codable {
     var barrelRoll = false
     var highlighterOnly = false
     var straightHighlighter = false
+    /// The highlighter slot is shared with tape: with `tape` set it lays opaque strips instead of ink.
+    var tape = false
+    var tapeColor = "#E9B949"
     var fillShapes = false
     var roundedShapes = false
     var selectHandwriting = true
@@ -98,6 +101,8 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
     func snapshot() -> PKDrawing { target?.drawing ?? PKDrawing() }
     func append(_ strokes: [PKStroke]) { target?.append(strokes) }
     func flush() { target?.viewport?.inkInput.finishPendingStroke(); target?.persist() }
+    func addStickyNote() { target?.viewport?.addStickyNote() }
+    func clear(_ kind: ClearKind) { target?.clear(kind) }
     func refreshUndo() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -185,6 +190,10 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             }
             view.inkInput.onCommit = { [weak self] strokes in
                 guard let self, self.writable, let canvas = self.canvas, !strokes.isEmpty else { return }
+                if strokes.count == 1, let probe = strokes.first, TapeInk.isProbe(probe) {
+                    if let location = probe.path.first?.location, let next = TapeInk.toggled(self.drawing, at: location) { self.replaceByUserCommand(next, canvas: canvas) }
+                    return
+                }
                 self.replaceByUserCommand(PKDrawing(strokes: self.drawing.strokes + strokes), canvas: canvas)
             }
             view.inkInput.snapShape = { [weak self] shape in
@@ -293,6 +302,14 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             catch { commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)"); return false }
         }
         func perform(_ action: @escaping () -> Void) { if usingTool { queued.append(action) } else { action() } }
+        func clear(_ kind: ClearKind) {
+            perform { [weak self] in
+                guard let self, self.writable, let canvas = self.canvas else { return }
+                if kind == .text { self.viewport?.removeAllText(); return }
+                let next = PKDrawing(strokes: self.drawing.strokes.filter { !kind.removes($0) })
+                if next.strokes.count != self.drawing.strokes.count { self.replaceByUserCommand(next, canvas: canvas) }
+            }
+        }
         func append(_ strokes: [PKStroke]) {
             perform { [weak self] in
                 guard let self, let canvas = self.canvas, self.writable else { return }
@@ -411,7 +428,13 @@ final class PaperView: UIView {
     }
 }
 
-struct TextBox: Codable { var text: String; var x: Double; var y: Double; var width: Double; var height: Double }
+struct TextBox: Codable { var text: String; var x: Double; var y: Double; var width: Double; var height: Double
+    /// Sticky notes are text boxes with a paper colour and a fixed square size.
+    var color: String? = nil
+    static let stickyInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
+    static let stickyFont: CGFloat = 17
+}
+final class PageTextView: UITextView { var noteColor: String? }
 
 extension PKDrawing {
     /// Paper is always light. PencilKit adapts ink to the current appearance, which would turn black ink white in the dark app UI.
@@ -446,7 +469,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     private var points: [CGPoint] = []
     var laserTrail = true
     private var start = CGPoint.zero
-    private var boxes: [UITextView] = []
+    private var boxes: [PageTextView] = []
     private var textWritable = true
     private(set) var textReadError:String?
     var onError:((String)->Void)?
@@ -630,17 +653,46 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         if recognizer.state == .cancelled || recognizer.state == .failed { laser.path = nil; onInteraction?(false) }
     }
     private func addText(_ box: TextBox) {
-        let view = UITextView(frame:CGRect(x:box.x,y:box.y,width:max(40,box.width),height:box.height))
+        let view = PageTextView(frame:CGRect(x:box.x,y:box.y,width:max(40,box.width),height:box.height))
         view.text = box.text; view.font = .systemFont(ofSize:20); view.textColor = UIColor(hex: "#1E1B1B"); view.backgroundColor = .clear; view.delegate = self
         view.isScrollEnabled = false; view.isUserInteractionEnabled = tool == .text
+        if let color = box.color {
+            view.noteColor = color; view.backgroundColor = UIColor(hex: color); view.font = .systemFont(ofSize: TextBox.stickyFont)
+            view.textContainerInset = TextBox.stickyInset; view.layer.cornerRadius = 3
+            view.layer.borderColor = UIColor.black.withAlphaComponent(0.08).cgColor; view.layer.borderWidth = 0.5
+        }
         boxes.append(view); document.addSubview(view)
     }
     func textViewDidChange(_ textView: UITextView) {
         guard textWritable else { return }
-        textView.sizeToFit()
-        let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height) }
+        if (textView as? PageTextView)?.noteColor == nil { textView.sizeToFit() }
+        saveTexts()
+    }
+    private func saveTexts() {
+        let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height,color:$0.noteColor) }
         do { try JSONEncoder().encode(saved).write(to:textURL,options:.atomic) }
         catch { onError?("Text konnte nicht gespeichert werden: \(error.localizedDescription)") }
+    }
+    /// Places a square sticky note in the middle of what is on screen and starts typing on it.
+    func addStickyNote(color: String = "#FFE36E") {
+        guard textWritable else { return }
+        var center = CGPoint(x: document.bounds.midX, y: document.bounds.midY)
+        if let window { center = document.convert(CGPoint(x: window.bounds.midX, y: window.bounds.midY), from: window) }
+        let side = min(200, document.bounds.width * 0.45)
+        let x = min(max(0, center.x - side / 2), max(0, document.bounds.width - side))
+        let y = min(max(0, center.y - side / 2), max(0, document.bounds.height - side))
+        addText(TextBox(text: "", x: x, y: y, width: side, height: side, color: color))
+        saveTexts()
+        guard let view = boxes.last else { return }
+        view.isUserInteractionEnabled = true
+        view.alpha = 0; view.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
+        UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0) { view.alpha = 1; view.transform = .identity }
+        view.becomeFirstResponder()
+    }
+    func removeAllText() {
+        guard textWritable, !boxes.isEmpty else { return }
+        let removed = boxes; boxes.removeAll(); saveTexts()
+        UIView.animate(withDuration: 0.2, animations: { removed.forEach { $0.alpha = 0 } }) { _ in removed.forEach { $0.removeFromSuperview() } }
     }
 }
 

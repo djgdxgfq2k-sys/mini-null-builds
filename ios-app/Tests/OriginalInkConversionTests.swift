@@ -90,7 +90,7 @@ final class OriginalInkConversionTests: XCTestCase {
     }
 
     func testFolderStylesMapGoodnotesColoursAndSymbols() {
-        let json = #"{"items":[{"path":"Schule","color":"black","symbol":"none"},{"path":"Schule/Bio","color":"green","symbol":"graduation"},{"path":"Kunst","color":"#6F44A3","symbol":"none"},{"path":"../x","color":"red"}],"compatibilityVersion":1}"#
+        let json = ##"{"items":[{"path":"Schule","color":"black","symbol":"none"},{"path":"Schule/Bio","color":"green","symbol":"graduation"},{"path":"Kunst","color":"#6F44A3","symbol":"none"},{"path":"../x","color":"red"}],"compatibilityVersion":1}"##
         let styles = LibraryImport.folderStyles(Data(json.utf8))
         XCTAssertEqual(styles["Schule"]?.color, ReferenceLayout.folderPalette[8])
         XCTAssertEqual(styles["Schule/Bio"]?.color, ReferenceLayout.folderPalette[12])

@@ -25,6 +25,7 @@ enum InkBuilder {
         }
     }
     static func strokes(_ input: [InkSample], settings: ToolSettings, creationDate: Date, seed: UInt32, recognizedShape: RecognizedShape? = nil) -> [PKStroke] {
+        if settings.tool == .marker && settings.tape { return TapeInk.strokes(input, settings: settings, creationDate: creationDate) }
         if let shape = recognizedShape {
             if settings.tool == .shapes { return GeometricInk.strokes(points: shape.points, settings: settings, closed: shape.closed) }
             let force = input.reduce(CGFloat(0)) { $0 + $1.force } / CGFloat(max(1, input.count))
