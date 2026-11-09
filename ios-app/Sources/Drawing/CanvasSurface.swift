@@ -257,7 +257,8 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         func applyTool() {
             guard let canvas, let settings = currentSettings else { return }
             if usingTool { queued.append { [weak self] in self?.applyTool() }; return }
-            let scale = viewport?.renderScale ?? 1
+            // PencilKit's live ink must be exactly as wide as the finished stroke at every zoom.
+            let scale = PencilKitZoom.widthFactor(renderScale: viewport?.renderScale ?? 1)
             switch settings.tool {
             case .eraser:
                 // Precision erases exactly the circle at its set size, whatever the pressure.
@@ -280,6 +281,11 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             let now = canvas.drawing
             guard now.strokes.count > start.strokes.count else { return }
             let added = Array(now.strokes.dropFirst(start.strokes.count))
+            if let first = added.first {
+                let base = settings.tool == .marker ? max(12, settings.width * 6) : settings.width
+                PencilKitZoom.learn(from: first, toolWidth: base * PencilKitZoom.widthFactor(renderScale: viewport?.renderScale ?? 1), renderScale: viewport?.renderScale ?? 1)
+                if PencilKitZoom.needsReapply { PencilKitZoom.needsReapply = false; applyTool() }
+            }
             var rebuilt: [PKStroke] = []
             for stroke in added {
                 let points = Array(stroke.path)
@@ -593,7 +599,11 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     private(set) var renderScale: CGFloat = 1
     func updateRenderScale() {
         // Quarter steps keep PencilKit from re-rendering on every tiny zoom change.
-        let target = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        // While a stroke is live PencilKit redraws the whole canvas in one layer; past this size the
+        // existing ink vanished until the Pencil lifted, so the sharp canvas stays within ~4096 pixels.
+        let longest = max(1, max(document.bounds.width, document.bounds.height) * (window?.screen.scale ?? 2))
+        let budget = max(1, (4096 / longest * 4).rounded(.down) / 4)
+        let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
         guard target != renderScale else { return }
         renderScale = target; layoutCanvas(); onRenderScale?()
     }
@@ -758,5 +768,26 @@ enum StrokeFactory {
     static func stroke(points: [CGPoint], color: UIColor, width: CGFloat) -> PKStroke {
         let controls = points.enumerated().map { i,p in PKStrokePoint(location:p,timeOffset:Double(i)/120,size:CGSize(width:width,height:width),opacity:1,force:1,azimuth:0,altitude:.pi/2) }
         return PKStroke(ink: PKInk(.pen,color:color), path:PKStrokePath(controlPoints:controls,creationDate:Date()))
+    }
+}
+
+/// Whether PencilKit divides a tool's width by the canvas zoom. The sharp canvas is zoomed to its render
+/// scale, so the tool width is multiplied back when it does; the answer is measured from real strokes.
+enum PencilKitZoom {
+    private static let key = "nullmini.pencilKitDividesByZoom"
+    static var needsReapply = false
+    static var dividesByZoom: Bool {
+        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+        set { if newValue != dividesByZoom { UserDefaults.standard.set(newValue, forKey: key); needsReapply = true } }
+    }
+    static func widthFactor(renderScale: CGFloat) -> CGFloat { dividesByZoom ? renderScale : 1 }
+    /// Compares the width PencilKit stored with the width it was given, at a zoom where the two answers differ.
+    static func learn(from stroke: PKStroke, toolWidth: CGFloat, renderScale: CGFloat) {
+        guard renderScale >= 1.5, toolWidth > 0 else { return }
+        let widths = stroke.path.map(\.size.width).sorted()
+        guard widths.count >= 5 else { return }
+        let ratio = widths[widths.count / 2] / toolWidth
+        // Dividing stores about 1/scale of the tool width; not dividing stores about the tool width.
+        dividesByZoom = ratio < (1 + 1 / renderScale) / 2
     }
 }

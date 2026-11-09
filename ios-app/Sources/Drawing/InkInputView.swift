@@ -230,6 +230,10 @@ extension PKCanvasView {
     /// it covers exactly `size` in its superview, but PencilKit renders at the zoomed resolution.
     func layoutSharp(covering size: CGSize, scale z: CGFloat) {
         guard size.width > 0, size.height > 0, z > 0 else { return }
+        // Re-applying the same layout mid-stroke made PencilKit drop its rendered ink; only change what changed.
+        let target = CGSize(width: size.width * z, height: size.height * z)
+        if abs(zoomScale - z) < 0.0001, abs(bounds.width - target.width) < 0.5, abs(bounds.height - target.height) < 0.5,
+           abs(transform.a - 1 / z) < 0.0001, abs(center.x - size.width / 2) < 0.5, abs(center.y - size.height / 2) < 0.5 { return }
         transform = .identity
         maximumZoomScale = max(z, maximumZoomScale)
         minimumZoomScale = z; maximumZoomScale = z
