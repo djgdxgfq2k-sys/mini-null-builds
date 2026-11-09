@@ -27,6 +27,24 @@ import UIKit
         settings.tool = .marker
         XCTAssertEqual(build(samples, settings).first?.ink.inkType, .marker)
     }
+    func testFountainPenWithoutPressureSwellsWhenSlowAndThinsWhenFast() throws {
+        // No pressure sensor: every sample reports 0.5. First half slow, second half fast.
+        let samples = (0...60).map { i -> InkSample in
+            let time = i <= 30 ? Double(i) / 40 : 30.0 / 40 + Double(i - 30) / 600
+            return InkSample(point: CGPoint(x: 10 + CGFloat(i) * 4, y: 50), time: time, force: 0.5, altitude: 0.8, azimuth: 0.4)
+        }
+        var settings = ToolSettings(); settings.penStyle = .fountain; settings.width = 6; settings.stabilization = 0; settings.sharpness = 0
+        let fountain = try XCTUnwrap(build(samples, settings).first)
+        XCTAssertGreaterThan(fountain.path[20].size.width, fountain.path[55].size.width * 1.5, "slow ink must be clearly wider than a fast flick")
+        settings.penStyle = .ballpoint
+        let ball = try XCTUnwrap(build(samples, settings).first)
+        XCTAssertTrue(ball.path.allSatisfy { $0.size.width == 6 }, "the ballpoint keeps an even line")
+        // Real pressure still wins over speed.
+        var pressed = samples; for i in pressed.indices { pressed[i].force = i < 30 ? 0.2 : 0.95 }
+        settings.penStyle = .fountain
+        let firm = try XCTUnwrap(build(pressed, settings).first)
+        XCTAssertGreaterThan(firm.path[55].size.width, firm.path[20].size.width)
+    }
     func testStabilizationReducesJitterAndPreservesEndpoints() throws {
         var samples: [InkSample] = []
         for i in 0...40 { let x = CGFloat(10 + i * 3), y: CGFloat = i % 2 == 0 ? 53 : 47; samples.append(InkSample(point: CGPoint(x: x, y: y), time: Double(i) / 120)) }

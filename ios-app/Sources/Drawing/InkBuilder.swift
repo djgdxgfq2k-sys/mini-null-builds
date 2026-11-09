@@ -51,6 +51,12 @@ enum InkBuilder {
                 }
             }
         }
+        // A Pencil without a pressure sensor (USB-C Apple Pencil, passive styluses, fingers) reports one
+        // constant force. Fountain and brush pens then swell and thin with writing speed instead, like a
+        // real nib: slow strokes lay down more ink, quick flicks come out thin.
+        if [.pen, .shapes].contains(settings.tool), settings.penStyle != .ballpoint, Self.hasFlatPressure(smooth) {
+            Self.applySpeedPressure(&smooth)
+        }
         let base = max(0.1, min(100, settings.width))
         var distances = [CGFloat](repeating: 0, count: smooth.count)
         for i in smooth.indices.dropFirst() { distances[i] = distances[i - 1] + hypot(smooth[i].point.x - smooth[i - 1].point.x, smooth[i].point.y - smooth[i - 1].point.y) }
@@ -105,6 +111,25 @@ enum InkBuilder {
             }
             return PKStroke(ink: ink, path: PKStrokePath(controlPoints: controls, creationDate: creationDate), randomSeed: seed &+ UInt32(index))
         }
+    }
+    /// `StylusInputPolicy.force` reports exactly 0.5 for input without a pressure sensor; real pressure always varies.
+    static func hasFlatPressure(_ samples: [InkSample]) -> Bool {
+        samples.count > 2 && samples.allSatisfy { abs($0.force - 0.5) < 0.001 }
+    }
+    /// Replaces a constant force with one derived from smoothed writing speed (0.2 fast … 0.85 slow).
+    static func applySpeedPressure(_ samples: inout [InkSample]) {
+        var speed: CGFloat = 0
+        for i in samples.indices {
+            if i > 0 {
+                let dt = max(1.0 / 240, samples[i].time - samples[i - 1].time)
+                let current = hypot(samples[i].point.x - samples[i - 1].point.x, samples[i].point.y - samples[i - 1].point.y) / CGFloat(dt)
+                // Smooth over a few samples so the line breathes instead of flickering.
+                speed = i == 1 ? current : speed + (current - speed) * 0.25
+            }
+            let fast = min(1, max(0, (speed - 60) / 900))
+            samples[i].force = 0.85 - 0.65 * pow(fast, 0.7)
+        }
+        if samples.count > 1 { samples[0].force = samples[1].force }
     }
     private static func stabilized(_ samples: [InkSample], strength: CGFloat) -> [InkSample] {
         guard strength > 0, samples.count > 2 else { return samples }
