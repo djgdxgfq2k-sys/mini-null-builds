@@ -73,7 +73,7 @@ import PDFKit
                                         pageThumbnail(page, active: index == pageIndex)
                                     }.accessibilityLabel("Seite \(index + 1)")
                                     HStack { Text("\(index + 1)"); Spacer(); Button { flush(); contextPage = page.id } label: { Image(systemName: "chevron.down").frame(width: 20, height: 14) }.accessibilityLabel("Optionen für Seite \(index + 1)")
-                                        .popover(isPresented: Binding(get: { contextPage == page.id }, set: { if !$0 { contextPage = nil } }), arrowEdge: .leading) { PageContextPopover { action in contextPage = nil; pageAction(action, index) } }
+                                        .goodnotesPopover(isPresented: Binding(get: { contextPage == page.id }, set: { if !$0 { contextPage = nil } }), arrowEdge: .leading) { PageContextPopover { action in contextPage = nil; pageAction(action, index) } }
                                     }.font(.system(size: 11)).frame(width: min(135, 175 * page.size.width / page.size.height)).frame(width: 135)
                                 }.frame(width: 135)
                             }

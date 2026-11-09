@@ -22,13 +22,20 @@ struct ToolbarCustomizationView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var settings: ToolSettings
     private let tools: [EditorTool] = [.lasso, .pen, .eraser, .geometry, .laser]
+    private let extras = [("text", "Text"), ("elements", "Elemente"), ("image", "Bilder"), ("sticky", "Notizzettel"), ("audio", "Aufnahmen"), ("accessories", "Zubehör")]
     var body: some View {
         NavigationStack {
             Form {
-                ForEach(tools, id: \.self) { tool in
-                    Toggle(tool == .pen ? "Schreibwerkzeuge" : tool.label, isOn: Binding(get: { settings.toolbarTools.contains(tool) }, set: { if $0 { settings.toolbarTools.insert(tool) } else { settings.toolbarTools.remove(tool) } }))
+                Section("Werkzeuge") {
+                    ForEach(tools, id: \.self) { tool in
+                        Toggle(tool == .pen ? "Schreibwerkzeuge" : tool.label, isOn: Binding(get: { settings.toolbarTools.contains(tool) }, set: { if $0 { settings.toolbarTools.insert(tool) } else { settings.toolbarTools.remove(tool) } }))
+                    }
+                    ForEach(extras, id: \.0) { key, label in
+                        Toggle(label, isOn: Binding(get: { !settings.hiddenToolbarItems.contains(key) }, set: { if $0 { settings.hiddenToolbarItems.remove(key) } else { settings.hiddenToolbarItems.insert(key) } }))
+                    }
                 }
-                Button("Standard wiederherstellen") { settings.toolbarTools = Set(tools) }
+                Section { Button("Standard wiederherstellen") { settings.toolbarTools = Set(tools); settings.hiddenToolbarItems = [] } }
+                    footer: { Text("Tipp: Halte die Werkzeugleiste gedrückt, um sie jederzeit anzupassen.") }
             }.goodnotesSheet().navigationTitle("Werkzeugleiste").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }.presentationDetents([.medium])

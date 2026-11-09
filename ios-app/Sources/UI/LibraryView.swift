@@ -197,7 +197,7 @@ import PhotosUI
             HStack(spacing: 0) {
                 Button { searchShown.toggle() } label: { OriginalIcon(name: "general/search-lg", catalog: OriginalAssets.icons, size: 23).frame(width: 54, height: 40) }.accessibilityLabel("Suchen")
                 Button { notifications.toggle() } label: { Image(systemName: "bell").font(.system(size: 22)).frame(width: 54, height: 40) }.accessibilityLabel("Benachrichtigungen")
-                    .popover(isPresented: $notifications) {
+                    .goodnotesPopover(isPresented: $notifications) {
                         VStack { HStack { Button { notifications = false } label: { Image(systemName: "xmark") }; Spacer(); Text("Benachrichtigungen").font(.system(size: 15, weight: .semibold)); Spacer() }.padding(); Spacer(); Text("Keine neuen Benachrichtigungen").font(.system(size: 13)).foregroundStyle(Theme.secondary); Spacer() }.frame(width: 330, height: 540).background(Theme.popover).presentationBackground(Theme.popover)
                     }
                 Menu {
@@ -219,7 +219,7 @@ import PhotosUI
             Spacer(minLength: 0)
             if !trash && librarySection == nil {
                 Button { newPopover.toggle() } label: { Label("Neu", systemImage: "plus").font(.system(size: 15)).frame(width: 88, height: 36).background(Theme.libraryAccent, in: Capsule()) }
-                    .popover(isPresented: $newPopover, arrowEdge: .top) { newDocumentMenu }
+                    .goodnotesPopover(isPresented: $newPopover, arrowEdge: .top) { newDocumentMenu }
             }
             Button { activeMenu = activeMenu == .layout ? nil : .layout } label: { Image(systemName: listLayout ? "list.bullet" : "square.grid.2x2").font(.system(size: 20)).frame(width: 26, height: 36) }.accessibilityLabel("Ansicht und Sortierung")
                 .anchorPreference(key: LibraryMenuAnchorKey.self, value: .bounds) { [.layout: $0] }
@@ -375,7 +375,7 @@ import PhotosUI
     }
     private func chevron(_ item: LibraryItem) -> some View {
         Button { contextID = item.id } label: { Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary).frame(width: 24, height: 32) }.accessibilityLabel("Optionen für \(item.title)")
-            .popover(isPresented: Binding(get: { contextID == item.id }, set: { if !$0 { contextID = nil } }), arrowEdge: .top) {
+            .goodnotesPopover(isPresented: Binding(get: { contextID == item.id }, set: { if !$0 { contextID = nil } }), arrowEdge: .top) {
                 VStack(spacing: 0) {
                     if trash { menuRow("Wiederherstellen", symbol: "arrow.uturn.backward") { store.restore(item.id); contextID = nil } }
                     else {

@@ -57,7 +57,7 @@ import PDFKit
                     Theme.canvas
                     if let page {
                         NotebookCanvas(pages: item?.pages ?? [], directory: store.directory(bookID), settings: settings, commands: commands, pageIndex: $pageIndex)
-                        floatingControls
+                        if !settings.readOnly { floatingControls.transition(.opacity) }
                         VStack { Spacer(); HStack { pageNavigation; Spacer() }.padding(.leading, 20).padding(.bottom, 33) }
                         KnightOverlay(commands: commands, pageSize: page.size, directory: store.directory(bookID)).id("extensions-" + page.id)
                     }
@@ -194,42 +194,61 @@ import PDFKit
                         Spacer(minLength: 0)
                         Button { commands.toggleKnight?() } label: { BucketIcon().stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)).frame(width: 17, height: 20).frame(width: 44, height: 44) }.accessibilityLabel("Ritter ein- oder ausblenden")
                         Button { addingPage.toggle() } label: { OriginalIcon(name: "navbar/addPage").frame(width: 44, height: 44) }.accessibilityLabel("Seite hinzufügen")
-                            .popover(isPresented: $addingPage) { PageAddPopover(currentPaper: page?.paper ?? "blank", paperColor: page?.paperColor ?? "#FFFFFF", importMedia: { kind, position in addingPage = false; if let page { pageMedia = PageMediaRequest(kind: kind, anchorID: page.id, position: position) } }) { paper, position in addingPage = false; addPage(paper, position: position) } }
+                            .goodnotesPopover(isPresented: $addingPage) { PageAddPopover(currentPaper: page?.paper ?? "blank", paperColor: page?.paperColor ?? "#FFFFFF", importMedia: { kind, position in addingPage = false; if let page { pageMedia = PageMediaRequest(kind: kind, anchorID: page.id, position: position) } }) { paper, position in addingPage = false; addPage(paper, position: position) } }
                         Button { sharing.toggle() } label: { OriginalIcon(name: "navbar/share").frame(width: 44, height: 44) }.accessibilityLabel("Teilen und Exportieren")
-                            .popover(isPresented: $sharing) { ExportPopover(exportPage: { sharing = false; export(.pdf, currentPage: true) }, exportAll: { sharing = false; export(.pdf) }, exportNative: { sharing = false; export(.native) }, exportOriginal: item?.originalName == nil ? nil : { sharing = false; export(.original) }, printDocument: { sharing = false; printDocument() }) }
+                            .goodnotesPopover(isPresented: $sharing) { ExportPopover(exportPage: { sharing = false; export(.pdf, currentPage: true) }, exportAll: { sharing = false; export(.pdf) }, exportNative: { sharing = false; export(.native) }, exportOriginal: item?.originalName == nil ? nil : { sharing = false; export(.original) }, printDocument: { sharing = false; printDocument() }) }
                         Button { moreDocument.toggle() } label: { OriginalIcon(name: "navbar/more-circle", size: 36).frame(width: 44, height: 44) }.accessibilityLabel("Mehr")
-                            .popover(isPresented: $moreDocument) {
-                                DocumentMorePopover(pageNumber: pageIndex + 1, bookmarked: page?.bookmarked == true, bookmark: { bookmark() }, rename: { moreDocument = false; newTitle = item?.title ?? ""; renaming = true }, changeTemplate: { paper in changeTemplate(paper); moreDocument = false }, readOnly: $settings.readOnly, finger: $settings.finger, report: { moreDocument = false; panel = .report }, pageCount: item?.pages.count ?? 1, page: page, directory: store.directory(bookID), pageAction: { action in moreDocument = false; handlePageAction(action, index: pageIndex) }, rotatePage: rotatePage, goToPage: { index in moreDocument = false; commands.afterInput { pageIndex = min(max(0, index), max(0, (item?.pages.count ?? 1) - 1)) } }, clearObjects: { kind in moreDocument = false; commands.clear(kind) })
+                            .goodnotesPopover(isPresented: $moreDocument) {
+                                DocumentMorePopover(pageNumber: pageIndex + 1, bookmarked: page?.bookmarked == true, bookmark: { bookmark() }, rename: { moreDocument = false; newTitle = item?.title ?? ""; renaming = true }, changeTemplate: { paper in changeTemplate(paper); moreDocument = false }, readOnly: $settings.readOnly, finger: $settings.finger, report: { moreDocument = false; panel = .report }, pageCount: item?.pages.count ?? 1, page: page, directory: store.directory(bookID), pageAction: { action in moreDocument = false; handlePageAction(action, index: pageIndex) }, rotatePage: rotatePage, goToPage: { index in moreDocument = false; commands.afterInput { pageIndex = min(max(0, index), max(0, (item?.pages.count ?? 1) - 1)) } }, clearObjects: { kind in moreDocument = false; commands.clear(kind) }, customizeToolbar: { moreDocument = false; customizingToolbar = true })
                             }
                     }
+                    if settings.readOnly {
+                        // Read-only mode folds the tools away, like the original: only a way back to editing remains.
+                        HStack(spacing: 10) {
+                            Image(systemName: "eye").font(.system(size: 15))
+                            Text("Nur lesen").font(.system(size: 15, weight: .semibold))
+                            Button { withAnimation(EditorMotion.subbar) { settings.readOnly = false } } label: {
+                                Text("Bearbeiten").font(.system(size: 14, weight: .semibold)).padding(.horizontal, 14).frame(height: 30).background(Color(referenceHex: "#263A60"), in: Capsule())
+                            }.accessibilityLabel("Bearbeiten einschalten")
+                        }.transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    } else {
                     HStack(spacing: 0) {
                         // Order and artwork of the original iPad toolbar: hand | lasso, pen, eraser, text, objects, image, shapes, sticky note, laser | audio.
                         mainTool(.hand, name: "newToolbar/selection"); toolbarDivider
                         if settings.toolbarTools.contains(.lasso) { mainTool(.lasso, name: settings.rectangularLasso ? "newToolbar/lasso/lasso_rectangular" : "newToolbar/lasso/lasso") }
                         if settings.toolbarTools.contains(.pen) { mainTool(.pen, name: "newToolbar/writing_tools/writing_tools") }
                         if settings.toolbarTools.contains(.eraser) { mainTool(.eraser, name: "newToolbar/eraser/eraser_stroke") }
-                        mainTool(.text, name: "newToolbar/text")
-                        mainTool(.elements, name: "newToolbar/element")
-                        toolbarAction("newToolbar/image", "Bilder") { if let page { pageMedia = PageMediaRequest(kind: .photos, anchorID: page.id, position: 1) } }
+                        if !settings.hiddenToolbarItems.contains("text") { mainTool(.text, name: "newToolbar/text") }
+                        if !settings.hiddenToolbarItems.contains("elements") { mainTool(.elements, name: "newToolbar/element") }
+                        if !settings.hiddenToolbarItems.contains("image") { toolbarAction("newToolbar/image", "Bilder") { if let page { pageMedia = PageMediaRequest(kind: .photos, anchorID: page.id, position: 1) } } }
                         if settings.toolbarTools.contains(.geometry) { mainTool(.geometry, name: "newToolbar/shapes") }
-                        toolbarAction("newToolbar/sticky_note", "Notizzettel") { settings.readOnly = false; settings.tool = .text; DispatchQueue.main.async { commands.addStickyNote() } }
+                        if !settings.hiddenToolbarItems.contains("sticky") { toolbarAction("newToolbar/sticky_note", "Notizzettel") { settings.readOnly = false; settings.tool = .text; DispatchQueue.main.async { commands.addStickyNote() } } }
                         if settings.toolbarTools.contains(.laser) { mainTool(.laser, name: "newToolbar/laser_pointer") }
                         toolbarDivider
-                        iconButton("mediaAndDevices/microphone-01", "Aufnahmen") { panel = .audio }
+                        if !settings.hiddenToolbarItems.contains("audio") { iconButton("mediaAndDevices/microphone-01", "Aufnahmen") { panel = .audio } }
+                        if !settings.hiddenToolbarItems.contains("accessories") {
                         Button { accessories.toggle() } label: {
                             ZStack(alignment: .topLeading) {
                                 OriginalIcon(name: "newToolbar/accessories3").position(x: 27.75, y: 22)
                                 Image(systemName: "chevron.down").font(.system(size: 9)).position(x: 47.5, y: 22)
                             }.frame(width: 66, height: 44)
                         }
-                            .accessibilityLabel("Zubehör").popover(isPresented: $accessories, arrowEdge: .top) {
+                            .accessibilityLabel("Zubehör").goodnotesPopover(isPresented: $accessories, arrowEdge: .top) {
                                 ReferenceToolMenu(title: "Zubehör", entries: [("Aufnahmen anzeigen", "navbar/recordings"), ("Zoom-Ansicht", "newToolbar/accessories/zoom"), ("Lineal", "newToolbar/accessories/ruler"), ("Zeitmesser", "newToolbar/accessories/timer")], enabled: [0, 1, 2, 3]) { index in accessories = false; if index == 0 { panel = .audio } else if index == 1 { commands.flush(); zoom.visible.toggle() } else if index == 2 { ruler.visible.toggle() } else if index == 3 { studyTimer.visible ? studyTimer.close() : studyTimer.start() } }
                             }
+                        }
                         Color.clear.frame(width: 3, height: 44).allowsHitTesting(false)
                     }.frame(height: 44)
+                    // Holding the toolbar opens its customisation, as in the original.
+                    .simultaneousGesture(LongPressGesture(minimumDuration: 0.7).onEnded { _ in customizingToolbar = true })
+                    .transition(.opacity)
+                    }
                 }.frame(width: max(850, geometry.size.width), height: 44)
             }.scrollBounceBehavior(.basedOnSize, axes: .horizontal).scrollDisabled(geometry.size.width >= 850)
         }.frame(height: ReferenceLayout.toolbar).background(Theme.toolbar).foregroundStyle(.white)
+            .animation(EditorMotion.subbar, value: settings.readOnly)
+            .animation(EditorMotion.subbar, value: settings.hiddenToolbarItems)
+            .animation(EditorMotion.subbar, value: settings.toolbarTools)
             .animation(EditorMotion.selection, value: settings.tool)
     }
     private func toolbarAction(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
@@ -248,7 +267,7 @@ import PDFKit
         } label: {
             OriginalIcon(name: artwork, size: 24, original: selected && artwork != name).foregroundStyle(selected ? Color(referenceHex: "#1D1B1B") : .white).frame(width: 36, height: 36).background(selected ? Theme.activeTool : .clear, in: RoundedRectangle(cornerRadius: 11)).frame(width: 50, height: 44)
         }.buttonStyle(ToolbarPressStyle()).accessibilityLabel(tool.label).accessibilityAddTraits(settings.tool == tool ? .isSelected : [])
-            .popover(isPresented: Binding(get: { toolPopover == tool }, set: { if !$0 { toolPopover = nil } }), arrowEdge: .top) { ToolOptionsView(tool: tool, settings: $settings, openMath: { toolPopover = nil; commands.flush(); panel = .math }) }
+            .goodnotesPopover(isPresented: Binding(get: { toolPopover == tool }, set: { if !$0 { toolPopover = nil } }), arrowEdge: .top) { ToolOptionsView(tool: tool, settings: $settings, openMath: { toolPopover = nil; commands.flush(); panel = .math }) }
     }
     private var floatingControls: some View {
         GeometryReader { geometry in
@@ -293,7 +312,7 @@ import PDFKit
                             else { Capsule().fill(.white).frame(width: 17, height: width) }
                         }.frame(width: 37, height: 37).background(settings.width == width ? Color(hex: "#484A4D") : .clear, in: RoundedRectangle(cornerRadius: 11)).frame(width: 44, height: 45)
                     }.accessibilityLabel("Stärke \(Int(width))")
-                        .popover(isPresented: Binding(get: { widthPopover == index }, set: { if !$0 { widthPopover = nil } })) { StrokeOptionsPopover(settings: $settings, presetIndex: index) }
+                        .goodnotesPopover(isPresented: Binding(get: { widthPopover == index }, set: { if !$0 { widthPopover = nil } })) { StrokeOptionsPopover(settings: $settings, presetIndex: index) }
                 }
                 if settings.tool != .eraser {
                     ForEach(contextColors, id: \.self) { color in
@@ -306,7 +325,7 @@ import PDFKit
             }.frame(height: 45)
             }
         }.foregroundStyle(.white).goodnotesPill()
-            .popover(isPresented: $colorPopover) { InkColorPalette(settings: $settings) }
+            .goodnotesPopover(isPresented: $colorPopover) { InkColorPalette(settings: $settings) }
     }
     private var contextColors: [String] { Theme.inks.contains(settings.color) ? Theme.inks : [settings.color] + Theme.inks }
     private var tapeSelected: Bool { settings.tool == .marker && settings.tape }

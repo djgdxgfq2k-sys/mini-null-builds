@@ -49,6 +49,8 @@ struct ToolSettings: Equatable, Codable {
     var pencilConnected = true
     var pressureMode = StylusPressureMode.automatic
     var toolbarTools: Set<EditorTool> = [.lasso, .pen, .eraser, .geometry, .laser]
+    /// Toolbar buttons the user switched off: "text", "elements", "image", "sticky", "audio", "accessories".
+    var hiddenToolbarItems: Set<String> = []
     var stabilization = 0.22
     var highlighterStabilization = 1.0
     var reduceLatency = true
@@ -268,7 +270,50 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 canvas.tool = PKInkingTool(ink, color: UIColor(hex: settings.color), width: settings.width * scale)
             }
         }
-        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; commands?.target = self; onActivate?() }
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { inputGeneration += 1; usingTool = true; toolStart = canvasView.drawing; commands?.target = self; onActivate?() }
+        private var toolStart: PKDrawing?
+        /// Replaces the strokes PencilKit just wrote with the Goodnotes-style pens built from the same
+        /// samples (fountain pen width by speed, pencil grain, tape strips, held shapes, ruler edges).
+        func restyleNewStrokes(since start: PKDrawing) {
+            guard let canvas, writable, let settings = currentSettings, !settings.appleInk || settings.tape,
+                  [.pen, .pencil, .marker, .shapes].contains(settings.tool) else { return }
+            let now = canvas.drawing
+            guard now.strokes.count > start.strokes.count else { return }
+            let added = Array(now.strokes.dropFirst(start.strokes.count))
+            var rebuilt: [PKStroke] = []
+            for stroke in added {
+                let points = Array(stroke.path)
+                guard !points.isEmpty else { continue }
+                let maxForce = points.map(\.force).max() ?? 0
+                let flat = points.allSatisfy { abs($0.force - points[0].force) < 0.0001 }
+                var samples = points.map { p in
+                    InkSample(point: p.location.applying(stroke.transform), time: p.timeOffset,
+                              force: flat ? 0.5 : min(1, max(0, maxForce > 1 ? p.force / 4.1667 : p.force)),
+                              altitude: p.altitude > 0 ? p.altitude : .pi / 2, azimuth: p.azimuth)
+                }
+                if samples.count == 1 { samples.append(samples[0]) }
+                // Draw-and-hold: the Pencil rested at the end of the stroke.
+                var shape: RecognizedShape?
+                if (settings.drawAndHold || (settings.tool == .shapes && settings.holdForShapes)) || (settings.tool == .shapes && !settings.holdForShapes),
+                   let end = samples.last {
+                    let rest = samples.reversed().prefix { hypot($0.point.x - end.point.x, $0.point.y - end.point.y) < 3 }
+                    let held = (rest.first?.time ?? 0) - (rest.last?.time ?? 0) >= 0.5
+                    if held || (settings.tool == .shapes && !settings.holdForShapes) {
+                        shape = ShapeRecognition.recognize(samples.map(\.point)).map { settings.roundedShapes ? (viewport?.inkInput.snapShape?($0) ?? $0) : $0 }
+                    }
+                }
+                rebuilt += InkBuilder.strokes(samples, settings: settings, creationDate: stroke.path.creationDate, seed: stroke.randomSeed, recognizedShape: shape)
+            }
+            // Take PencilKit's own undo step back so one undo removes the whole stroke.
+            if canvas.undoManager?.canUndo == true {
+                canvas.undoManager?.undo()
+                // Something else was on top of the undo stack: put it back.
+                if canvas.drawing.strokes.count < start.strokes.count, canvas.undoManager?.canRedo == true { canvas.undoManager?.redo() }
+            }
+            if canvas.drawing.strokes.count != start.strokes.count { canvas.drawing = start }
+            drawing = start
+            viewport?.inkInput.onCommit?(rebuilt)
+        }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             // Sole authoritative drawing lives here. Never publish it through SwiftUI state.
             drawing = canvasView.drawing
@@ -294,6 +339,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.inputGeneration == generation else { return }
                 self.usingTool = false
+                if let start = self.toolStart { self.toolStart = nil; self.restyleNewStrokes(since: start) }
                 let pending = self.queued; self.queued.removeAll()
                 for action in pending { action() }
                 if erasing { self.commands?.didFinishErasing?() }
@@ -580,8 +626,11 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         canvas.isUserInteractionEnabled = writable && !overlay && tool != .lasso && tool != .hand
         inkInput.configure(settings, writable: writable)
         // The stroke engine writes; PencilKit's own recognizer only writes in the Apple-pen fallback or erases.
-        let engine = inkInput.enabled
+        // PencilKit's own recognizer is the one input route proven on every iPad and stylus; custom touch
+        // routing never reached the engine on the device. The engine restyles each stroke once it lifts.
+        let engine = inkInput.enabled && InkInputView.liveTouches
         inkTouches.isEnabled = engine
+        inkInput.isHidden = !engine
         canvas.drawingGestureRecognizer.isEnabled = !engine
         interaction.isHidden = !overlay || !writable
         let touches = StylusInputPolicy.drawingTouches(finger: settings.finger, pencilConnected: settings.pencilConnected)

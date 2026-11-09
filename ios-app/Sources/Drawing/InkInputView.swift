@@ -7,6 +7,8 @@ import PencilKit
 final class InkInputView: UIView {
     private let preview = PKCanvasView()
     private(set) var enabled = false
+    /// Off: PencilKit's recognizer takes the touches and finished strokes are rebuilt by the engine.
+    static var liveTouches = false
     /// Wet ink renders at the page's on-screen zoom, like the committed ink.
     var renderScale: CGFloat = 1 { didSet { if renderScale != oldValue { setNeedsLayout() } } }
     private var settings = ToolSettings()
@@ -56,7 +58,7 @@ final class InkInputView: UIView {
         enabled = writable && !value.appleInk && [.pen, .pencil, .marker, .shapes].contains(value.tool)
         if !enabled && active { finishStroke() }
         // Never hit-tested: touches land on the page canvas, whose recognizer feeds this engine.
-        isUserInteractionEnabled = false; isHidden = !enabled
+        isUserInteractionEnabled = false; isHidden = !enabled || !Self.liveTouches
     }
     func beginStroke(_ sample: InkSample, source: UITouch.TouchType = .pencil) {
         guard enabled else { return }

@@ -57,10 +57,10 @@ import SwiftUI
             sectionTitle("Einstellungen").padding(.top, 24.5).padding(.bottom, 8)
             VStack(spacing: 0) {
                 Button { penSettings = true } label: { settingsRow("Stift-Einstellungen", chevron: true) }
-                    .popover(isPresented: $penSettings) { penDetail }
+                    .goodnotesPopover(isPresented: $penSettings) { penDetail }
                 rowDivider
                 Button { writingAids = true } label: { settingsRow("Schreibhilfen", chevron: true) }
-                    .popover(isPresented: $writingAids) { WritingAidsView(settings: $settings) }
+                    .goodnotesPopover(isPresented: $writingAids) { WritingAidsView(settings: $settings) }
                 rowDivider
                 Button { openMath?() } label: { settingsRow("Mathe-Assistenz", chevron: true) }
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 26)).padding(.horizontal, 16)

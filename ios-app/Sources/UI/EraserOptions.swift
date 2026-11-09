@@ -14,7 +14,7 @@ struct EraserContextToolbar: View {
                     .frame(width: 118, height: 36).background(Color(hex: "#3B3D40"), in: RoundedRectangle(cornerRadius: 13.5))
             }.accessibilityLabel("Radierertyp")
             Button { advanced = true } label: { OriginalIcon(name: "newToolbar/toggles-some", size: 24).frame(width: 48, height: 45) }.accessibilityLabel("Erweiterte Einstellungen")
-                .popover(isPresented: $advanced) { EraserAdvancedOptions(settings: $settings) { advanced = false; clearPage() } }
+                .goodnotesPopover(isPresented: $advanced) { EraserAdvancedOptions(settings: $settings) { advanced = false; clearPage() } }
             ForEach(0..<3) { index in
                 let name = ["small", "medium", "large"][index]
                 Button { settings.eraserSize = index } label: {

@@ -14,9 +14,9 @@ struct ShapeContextToolbar: View {
             }
             Button { strokeOptions = true } label: {
                 VStack(spacing: 5) { Capsule().frame(width: 17, height: 1); Capsule().frame(width: 17, height: 2); Capsule().frame(width: 11, height: 3) }.frame(width: 44, height: 45)
-            }.accessibilityLabel("Stricheinstellungen").popover(isPresented: $strokeOptions) { StrokeOptionsPopover(settings: $settings) }
+            }.accessibilityLabel("Stricheinstellungen").goodnotesPopover(isPresented: $strokeOptions) { StrokeOptionsPopover(settings: $settings) }
             Button { colorOptions = true } label: { Circle().fill(Color(hex: settings.color)).frame(width: 20, height: 20).overlay { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(UIColor(hex: settings.color).isLight ? .gray : .white) }.frame(width: 44, height: 45) }.accessibilityLabel("Farbe und Füllung")
-                .popover(isPresented: $colorOptions) { InkColorPalette(settings: $settings) }
+                .goodnotesPopover(isPresented: $colorOptions) { InkColorPalette(settings: $settings) }
         }.padding(.horizontal, 1.5).foregroundStyle(.white)
     }
 }

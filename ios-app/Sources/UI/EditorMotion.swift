@@ -54,3 +54,12 @@ struct SolidPlainButtonStyle: ButtonStyle {
     }
 }
 extension ButtonStyle where Self == SolidPlainButtonStyle { static var solidPlain: SolidPlainButtonStyle { SolidPlainButtonStyle() } }
+
+extension View {
+    /// Every popover looks like the original: dark card with an arrow, never a full-screen sheet on iPad.
+    func goodnotesPopover<Content: View>(isPresented: Binding<Bool>, arrowEdge: Edge = .top, @ViewBuilder content: @escaping () -> Content) -> some View {
+        popover(isPresented: isPresented, arrowEdge: arrowEdge) {
+            content().presentationCompactAdaptation(.popover).presentationBackground(Theme.popover).preferredColorScheme(.dark)
+        }
+    }
+}
