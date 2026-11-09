@@ -114,14 +114,23 @@ enum NotebookArchive {
                     if let data = files[layout.notesPath], let ink = try? OriginalInk.read(data, convert: true) {
                         unsupported += ink.unsupported
                         if !ink.editable.isEmpty { try DrawingDisk.save(PKDrawing(strokes: ink.editable), directory: directory, page: page.id) }
+                        if !ink.texts.isEmpty { try JSONEncoder().encode(ink.texts).write(to: directory.appendingPathComponent(page.id + ".texts.json"), options: .atomic) }
+                        // Pictures stay on the original layer; their files are copied once next to the notebook.
+                        for picture in ink.images {
+                            let target = directory.appendingPathComponent("attachment-" + picture.attachment)
+                            guard !FileManager.default.fileExists(atPath: target.path), let bytes = files["attachments/" + picture.attachment] else { continue }
+                            try bytes.write(to: target, options: .atomic)
+                        }
                         page.inkConverted = true
-                        if ink.strokes.isEmpty && ink.unsupported == 0 { page.sourceNotes = nil }
+                        if ink.strokes.isEmpty && ink.images.isEmpty && ink.unsupported == 0 { page.sourceNotes = nil }
                     } else { unsupported += 1 }
                     item.pages.append(page)
                 }
                 if unsupported > 0 { item.warnings.append("\(unsupported) besondere Elemente (z. B. Bilder oder Spezialstifte) werden noch nicht angezeigt, bleiben aber im Original erhalten.") }
                 guard !item.pages.isEmpty else { throw NotebookError.invalid("Keine lesbaren Seiten gefunden.") }
                 item.originalName = url.lastPathComponent
+                // The notebook's Goodnotes cover becomes its library artwork.
+                if let cover = files["thumbnail.jpg"], UIImage(data: cover) != nil { try cover.write(to: directory.appendingPathComponent(NotebookCover.fileName), options: .atomic) }
                 try Data(contentsOf: url).write(to: directory.appendingPathComponent("original.goodnotes"), options: .atomic)
             }
         }
@@ -131,7 +140,8 @@ enum NotebookArchive {
         guard let path = page.sourceNotes else { return OriginalInk() }
         // Converted pages keep only what could not become PencilKit strokes on the original layer.
         var ink = try OriginalInk.read(entry(path, in: directory.appendingPathComponent("original.goodnotes")), convert: page.inkConverted == true)
-        ink.editable = []
+        ink.editable = []; ink.texts = []
+        ink.loadImages(from: directory)
         return ink
     }
     /// One member of an archive, with the same safety checks as `entries`, without unpacking the rest.
@@ -184,17 +194,14 @@ enum NotebookArchive {
                     }
                     c.restoreGState()
                 } else { PaperView.paint(c, bounds: bounds, paper: page.paper) }
-                for s in inks[page.id]?.strokes ?? [] {
-                    c.saveGState(); c.setFillColor(s.color.cgColor); c.setStrokeColor(s.color.cgColor); c.setLineWidth(s.width); c.setLineCap(.round); c.setLineJoin(.round); c.addPath(s.path)
-                    if s.filled { c.fillPath() } else { c.strokePath() }; c.restoreGState()
-                }
+                inks[page.id]?.draw(in: c)
                 // PencilKit public image API; source drawing stays vector data in .nullmini.
                 let imageScale = min(3,4096/max(bounds.width,bounds.height))
                 drawings[page.id]?.paperImage(from: bounds, scale: imageScale).draw(in: bounds)
                 for box in texts[page.id] ?? [] {
                 if let color = box.color { UIColor(hex: color).setFill(); UIRectFill(CGRect(x: box.x, y: box.y, width: box.width, height: box.height)) }
                 let inset = box.color == nil ? UIEdgeInsets(top: 8, left: 5, bottom: 0, right: 5) : TextBox.stickyInset
-                (box.text as NSString).draw(in: CGRect(x: box.x + inset.left, y: box.y + inset.top, width: max(1, box.width - inset.left - inset.right), height: box.height - inset.top), withAttributes: [.font: UIFont.systemFont(ofSize: box.color == nil ? 20 : TextBox.stickyFont), .foregroundColor: UIColor(hex: "#1E1B1B")])
+                (box.text as NSString).draw(in: CGRect(x: box.x + inset.left, y: box.y + inset.top, width: max(1, box.width - inset.left - inset.right), height: box.height - inset.top), withAttributes: [.font: UIFont.systemFont(ofSize: box.fontSize.map { CGFloat($0) } ?? (box.color == nil ? 20 : TextBox.stickyFont)), .foregroundColor: UIColor(hex: "#1E1B1B")])
             }
                 c.restoreGState()
             }

@@ -83,8 +83,12 @@ import PhotosUI
         }
         .animation(.easeInOut(duration: 0.2), value: importBusy)
         .sheet(isPresented: $notebookCreation) {
-            NotebookCreationView { name, paper, paperColor, size in
-                if var item = store.add(title: name, parent: folder, color: "#FFFFFF") { item.pages[0].paper = paper; item.pages[0].paperColor = paperColor; item.pages[0].width = Double(size.width); item.pages[0].height = Double(size.height); store.update(item); store.open(item.id) }
+            NotebookCreationView { name, paper, paperColor, size, cover in
+                if var item = store.add(title: name, parent: folder, color: "#FFFFFF") {
+                    item.pages[0].paper = paper; item.pages[0].paperColor = paperColor; item.pages[0].width = Double(size.width); item.pages[0].height = Double(size.height)
+                    if let cover, let data = NotebookCover.make(color: cover) { try? data.write(to: NotebookCover.url(store.directory(item.id)), options: .atomic) }
+                    store.update(item); store.open(item.id)
+                }
             }
         }
         .sheet(isPresented: $whiteboardCreation) {
@@ -282,6 +286,13 @@ import PhotosUI
             image: { newPopover = false; choosingImage = true },
             camera: { newPopover = false; takingPhoto = true },
             folder: { newPopover = false; creatingFolder = true },
+            textDocument: { newPopover = false; if let item = StudyDocuments.createTextDocument(store: store, parent: folder) { store.open(item.id) } },
+            quickRecording: {
+                newPopover = false
+                let stamp = Date().formatted(.dateTime.day().month().hour().minute())
+                if let item = store.add(title: "Schnellaufnahme " + stamp, parent: folder) { store.openRecorder = true; store.open(item.id) }
+            },
+            flashcards: { newPopover = false; if let item = StudyDocuments.createFlashcards(store: store, parent: folder) { store.open(item.id) } },
             canScan: DocumentMediaPDF.canScan,
             canUseCamera: DocumentMediaPDF.canUseCamera
         )
@@ -341,7 +352,7 @@ import PhotosUI
                         if item.folder { FolderArtwork(color: item.color, symbol: item.symbol).frame(width: 146, height: 126).frame(height: 152, alignment: .bottom) }
                         else if let page = item.pages.first {
                             if item.kind == .whiteboard { WhiteboardArtwork(page: page, directory: store.directory(item.id)).frame(width: 162, height: 122).frame(height: 152, alignment: .bottom) }
-                            else { NotebookPreview(page: page, directory: store.directory(item.id)).frame(width: 134, height: 152) }
+                            else { NotebookPreview(page: page, directory: store.directory(item.id), cover: true).frame(width: 134, height: 152) }
                         }
                     }.frame(width: 146, height: 152, alignment: .bottom)
                 }

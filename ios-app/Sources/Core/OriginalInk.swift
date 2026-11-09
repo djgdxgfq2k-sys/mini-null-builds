@@ -1,5 +1,7 @@
 import UIKit
 import PencilKit
+import PDFKit
+import ImageIO
 
 struct OriginalStroke {
     let path: CGPath
@@ -17,14 +19,115 @@ struct OriginalInk {
     /// Pen, fountain-pen and highlighter strokes rebuilt as PencilKit strokes, so they can be erased,
     /// lassoed and undone like anything written in NullMini. Filled only when `read(_:convert:)` converts.
     var editable: [PKStroke] = []
+    /// Photos and pasted pictures: an attachment drawn at `center` with `size`, turned by `rotation` radians.
+    var images: [OriginalImage] = []
+    /// Text boxes and sticky notes, converted to NullMini text boxes when the page is imported.
+    var texts: [TextBox] = []
     var unsupported = 0
+    struct OriginalImage { let attachment: String; let center: CGPoint; let size: CGSize; let rotation: CGFloat; var image: UIImage? = nil }
+
+    private static func point(_ field: WireField?) -> CGPoint? {
+        guard let m = try? field?.message(), let x = m[1]?.float, let y = m[2]?.float, x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+    private static func color(_ field: WireField?) -> UIColor? {
+        guard let m = try? field?.message() else { return nil }
+        return UIColor(red: m[1]?.float ?? 0, green: m[2]?.float ?? 0, blue: m[3]?.float ?? 0, alpha: m[4]?.float ?? 1)
+    }
+    private static func hex(_ color: UIColor) -> String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "#%02X%02X%02X", Int(max(0, min(1, r)) * 255), Int(max(0, min(1, g)) * 255), Int(max(0, min(1, b)) * 255))
+    }
+    /// A picture element: field 3 holds centre, natural size and rotation; field 4 names the attachment.
+    static func image(_ m: WireMessage) -> OriginalImage? {
+        guard let attachment = m[4]?.string, UUID(uuidString: attachment) != nil, m[14]?.integer != 1,
+              let geometry = try? m[3]?.message(), let center = point(geometry[1]), let size = point(geometry[2]),
+              size.x > 0, size.y > 0, size.x < 100_000, size.y < 100_000 else { return nil }
+        let rotation = geometry[3]?.float ?? 0
+        return OriginalImage(attachment: attachment, center: center, size: CGSize(width: size.x, height: size.y), rotation: rotation.isFinite ? rotation : 0)
+    }
+    /// A text box (kind 31) or sticky note (kind 35): origin and scale in field 20, box size in 21,
+    /// and the LZ4-compressed attributed text in 32 as runs of (string, attributes).
+    static func text(_ m: WireMessage) -> TextBox? {
+        guard let place = try? m[20]?.message(), let origin = point(place[1]),
+              let body = try? m[32]?.message(), let content = try? body[1]?.message(), let compressed = content[2]?.data,
+              let raw = try? AppleLZ4.decode(compressed), let runs = try? WireMessage(raw) else { return nil }
+        var string = "", fontSize: CGFloat?
+        for run in runs.fields where run.number == 1 {
+            guard let r = try? run.message() else { continue }
+            string += r[1]?.string ?? ""
+            if fontSize == nil, let attributes = try? r[2]?.message(), let size = attributes[40]?.float, size > 0 { fontSize = size }
+        }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sticky = m[2]?.integer == 35
+        guard !trimmed.isEmpty || sticky else { return nil }
+        let scale = max(0.05, min(20, place[3]?.float ?? 1))
+        var width: CGFloat = 200, height: CGFloat = 40
+        if let frame = try? m[21]?.message(), let sized = try? (frame[2] ?? frame[3])?.message() {
+            if let w = sized[1]?.float, w.isFinite, w > 0 { width = w }
+            if let h = sized[2]?.float, h.isFinite, h > 0 { height = h }
+        }
+        if let measured = point(body[2]), measured.y.isFinite { height = max(height, measured.y + 20) }
+        var box = TextBox(text: string.hasSuffix("\n") ? String(string.dropLast()) : string, x: origin.x, y: origin.y, width: width * scale, height: height * scale)
+        box.fontSize = (fontSize ?? 17) * scale
+        if sticky, let background = (try? m[30]?.message()).flatMap({ try? $0[1]?.message() }).flatMap({ color($0[1]) }) { box.color = hex(background) }
+        else if sticky { box.color = "#FFE36E" }
+        return box
+    }
+    /// A connector line or arrow drawn freely: field 20 holds start, bends and end; field 32 width and colour.
+    static func connector(_ m: WireMessage) -> (points: [CGPoint], width: CGFloat, color: UIColor)? {
+        guard let path = try? m[20]?.message() else { return nil }
+        var points: [CGPoint] = []
+        for f in path.fields {
+            if f.number == 2, let p = point(f) { points.append(p) }
+            else if f.number == 1 || f.number == 3, let inner = try? f.message(), let p = point(inner[1]) { if f.number == 1 { points.insert(p, at: 0) } else { points.append(p) } }
+        }
+        guard points.count >= 2 else { return nil }
+        let style = try? m[32]?.message()
+        let width = max(0.3, min(50, style?[1]?.float ?? 1.5))
+        let ink = (try? style?[3]?.message()).flatMap { color($0[1]) } ?? UIColor(red: 0.118, green: 0.106, blue: 0.106, alpha: 1)
+        return (points, width, ink)
+    }
+
     static func read(_ data: Data, convert: Bool = false) throws -> OriginalInk {
         var result = OriginalInk()
         let date = Date(timeIntervalSince1970: 0)
-        for record in try WireMessage.records(data) {
+        let records = try WireMessage.records(data)
+        // A bare record whose field 3 is 1 is a tombstone: the element with that id was deleted in Goodnotes.
+        var deleted = Set<String>()
+        for record in records where record[3]?.integer == 1 && record[3]?.kind == 0 {
+            if let id = record[1]?.string, UUID(uuidString: id) != nil { deleted.insert(id) }
+        }
+        for record in records {
+            if let field = record[1], field.kind == 2, field.string.flatMap({ UUID(uuidString: $0) }) == nil,
+               let m = try? field.message(), let picture = image(m) {
+                if let id = m[1]?.string, deleted.contains(id) { continue }
+                result.images.append(picture); continue
+            }
+            if let field = record[21], let m = try? field.message() {
+                if let id = m[1]?.string, deleted.contains(id) { continue }
+                if let box = text(m) { result.texts.append(box) }
+                continue
+            }
+            if let field = record[22], let m = try? field.message() {
+                if let id = m[1]?.string, deleted.contains(id) { continue }
+                if let line = connector(m) {
+                    if convert {
+                        let lines = [line.points.map { InkPoint(point: $0, radius: line.width / 2) }]
+                        result.editable += lines.compactMap { editableStroke(densified($0), offset: .identity, color: line.color, marker: false, variable: false, date: date) }
+                    } else {
+                        let path = CGMutablePath(); path.addLines(between: line.points)
+                        result.strokes.append(OriginalStroke(path: path, color: line.color, width: line.width, filled: false))
+                    }
+                }
+                continue
+            }
             guard let field = record[7] else { continue }
             // Some elements under field 7 are not stroke messages; count them instead of failing the page.
             guard let m = try? field.message() else { result.unsupported += 1; continue }
+            if let id = m[1]?.string, deleted.contains(id) { continue }
+            if m[14]?.integer == 1 && m[14]?.kind == 0 { continue }
             guard let compressed = m[2]?.data else { continue }
             do {
                 let raw = try AppleLZ4.decode(compressed)
@@ -39,13 +142,19 @@ struct OriginalInk {
                     if dx.isFinite, dy.isFinite { offset = CGAffineTransform(translationX: dx, y: dy) }
                 }
                 let marker = m[5]?.integer == 1
-                if convert, [0, 1, 4].contains(type) {
+                if convert, [0, 1, 4, 5].contains(type) {
                     let lines = try centerlines(raw, type: Int(type))
-                    result.editable += lines.compactMap { editableStroke($0, offset: offset, color: c, marker: marker, variable: type != 0, date: date) }
+                    result.editable += lines.compactMap { editableStroke($0, offset: offset, color: c, marker: marker, variable: type == 1 || type == 4, pencil: type == 5, date: date) }
                     continue
                 }
                 if type == 0 { if let stroke = try constant(raw, color: c) { result.strokes.append(stroke.moved(offset)) } }
                 else if type == 1 { result.strokes.append(contentsOf: try flattened(raw, color: c).map { $0.moved(offset) }) }
+                else if type == 5 {
+                    for line in try centerlines(raw, type: 5) where line.count > 1 {
+                        let path = CGMutablePath(); path.addLines(between: line.map(\.point))
+                        result.strokes.append(OriginalStroke(path: path, color: c.withAlphaComponent(c.cgColor.alpha * 0.8), width: (line.first?.radius ?? 0.5) * 2, filled: false).moved(offset))
+                    }
+                }
                 else { result.unsupported += 1 }
             } catch { result.unsupported += 1 }
         }
@@ -76,10 +185,19 @@ struct OriginalInk {
                 line.append(InkPoint(point: CGPoint(x: x, y: y), radius: radius))
             }
         }
-        if type == 0 {
-            guard name == "vuA(v)A(S(uu))A(S(uuuu))vA(f)" else { throw NotebookError.invalid("Unbekannte Strichversion.") }
-            let radius = max(0.05, min(5000, try r.float() / 2))
+        if type == 0 || type == 5 {
             func count(_ stride: Int) throws -> Int { let n = Int(try r.uint(4)); guard n <= r.remaining / stride else { throw NotebookError.invalid("Stricharray abgeschnitten.") }; return n }
+            let radius: CGFloat
+            if type == 5 {
+                // Pencil: width, commands, then per-sample tilt/pressure records that only shade the
+                // texture, followed by the same move/quad centre line as a constant pen.
+                guard name == "vuA(v)A(S(uuuuu))A(S(uuuuuuuuuuu))A(S(uu))A(v)A(S(uu))A(S(uuuu))A(u)" else { throw NotebookError.invalid("Unbekannte Bleistiftversion.") }
+                radius = max(0.05, min(50, try r.float() / 2))
+                for stride in [2, 20, 44, 8] { _ = try r.take(try count(stride) * stride) }
+            } else {
+                guard name == "vuA(v)A(S(uu))A(S(uuuu))vA(f)" else { throw NotebookError.invalid("Unbekannte Strichversion.") }
+                radius = max(0.05, min(5000, try r.float() / 2))
+            }
             var commands: [UInt64] = []
             for _ in 0 ..< (try count(2)) { commands.append(try r.uint(2)) }
             var moves: [CGPoint] = []
@@ -148,11 +266,22 @@ struct OriginalInk {
         return result
     }
 
-    static func editableStroke(_ line: [InkPoint], offset: CGAffineTransform, color: UIColor, marker: Bool, variable: Bool, date: Date) -> PKStroke? {
+    /// Straight connector segments get intermediate points so the erasers can cut them anywhere.
+    static func densified(_ line: [InkPoint]) -> [InkPoint] {
+        guard var last = line.first else { return line }
+        var out = [last]
+        for p in line.dropFirst() {
+            let steps = max(1, min(400, Int(hypot(p.point.x - last.point.x, p.point.y - last.point.y) / 2)))
+            for i in 1 ... steps { let t = CGFloat(i) / CGFloat(steps); out.append(InkPoint(point: CGPoint(x: last.point.x + (p.point.x - last.point.x) * t, y: last.point.y + (p.point.y - last.point.y) * t), radius: p.radius)) }
+            last = p
+        }
+        return out
+    }
+    static func editableStroke(_ line: [InkPoint], offset: CGAffineTransform, color: UIColor, marker: Bool, variable: Bool, pencil: Bool = false, date: Date) -> PKStroke? {
         var points = line.filter { $0.point.x.isFinite && $0.point.y.isFinite && $0.radius.isFinite }
         guard let first = points.first else { return nil }
         if points.count == 1 { points.append(InkPoint(point: CGPoint(x: first.point.x + 0.01, y: first.point.y), radius: first.radius)) }
-        let ink = PKInk(marker ? .marker : (variable ? .pen : .monoline), color: color)
+        let ink = PKInk(marker ? .marker : (pencil ? .pencil : (variable ? .pen : .monoline)), color: color)
         let controls = points.enumerated().map { index, p in
             let width = max(0.1, min(400, p.radius * 2))
             return PKStrokePoint(location: p.point.applying(offset), timeOffset: TimeInterval(index) / 240, size: CGSize(width: width, height: width), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
@@ -269,12 +398,38 @@ final class OriginalInkView: UIView {
         guard let c = UIGraphicsGetCurrentContext() else { return }
         Self.render(c, ink: ink)
     }
-    private static func render(_ c: CGContext, ink: OriginalInk) {
-        guard !ink.strokes.isEmpty else { return }
-        for s in ink.strokes {
+    private static func render(_ c: CGContext, ink: OriginalInk) { ink.draw(in: c) }
+}
+
+extension OriginalInk {
+    /// Pictures first (they sit under ink in Goodnotes), then the strokes that stayed on the original layer.
+    func draw(in c: CGContext) {
+        for picture in images {
+            guard let image = picture.image else { continue }
+            c.saveGState()
+            c.translateBy(x: picture.center.x, y: picture.center.y); c.rotate(by: picture.rotation)
+            UIGraphicsPushContext(c)
+            image.draw(in: CGRect(x: -picture.size.width / 2, y: -picture.size.height / 2, width: picture.size.width, height: picture.size.height))
+            UIGraphicsPopContext()
+            c.restoreGState()
+        }
+        for s in strokes {
             c.saveGState(); c.setStrokeColor(s.color.cgColor); c.setFillColor(s.color.cgColor)
             c.setLineWidth(s.width); c.setLineCap(.round); c.setLineJoin(.round); c.addPath(s.path)
             if s.filled { c.fillPath() } else { c.strokePath() }; c.restoreGState()
+        }
+    }
+    /// Decodes picture attachments copied next to the notebook, downsampled so a page never holds full camera images.
+    mutating func loadImages(from directory: URL) {
+        for index in images.indices {
+            let url = directory.appendingPathComponent("attachment-" + images[index].attachment)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            if data.starts(with: Data("%PDF".utf8)), let page = PDFDocument(data: data)?.page(at: 0) {
+                images[index].image = page.thumbnail(of: CGSize(width: 2000, height: 2000), for: .cropBox)
+            } else if let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2400, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) {
+                images[index].image = UIImage(cgImage: cg)
+            }
         }
     }
 }

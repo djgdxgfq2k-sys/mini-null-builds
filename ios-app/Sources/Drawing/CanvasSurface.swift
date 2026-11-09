@@ -194,6 +194,11 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                     if let location = probe.path.first?.location, let next = TapeInk.toggled(self.drawing, at: location) { self.replaceByUserCommand(next, canvas: canvas) }
                     return
                 }
+                // Strokes laid along the ruler's edge come out straight.
+                let strokes: [PKStroke] = MainActor.assumeIsolated {
+                    guard RulerState.shared.visible, let page = self.viewport?.document else { return strokes }
+                    return strokes.map { RulerState.shared.snapped($0, toWindow: { page.convert($0, to: nil) }, fromWindow: { page.convert($0, from: nil) }) ?? $0 }
+                }
                 self.replaceByUserCommand(PKDrawing(strokes: self.drawing.strokes + strokes), canvas: canvas)
             }
             view.inkInput.snapShape = { [weak self] shape in
@@ -431,10 +436,12 @@ final class PaperView: UIView {
 struct TextBox: Codable { var text: String; var x: Double; var y: Double; var width: Double; var height: Double
     /// Sticky notes are text boxes with a paper colour and a fixed square size.
     var color: String? = nil
+    /// Imported Goodnotes text keeps its size; boxes made here use the default.
+    var fontSize: Double? = nil
     static let stickyInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
     static let stickyFont: CGFloat = 17
 }
-final class PageTextView: UITextView { var noteColor: String? }
+final class PageTextView: UITextView { var noteColor: String?; var fontSize: Double? }
 
 extension PKDrawing {
     /// Paper is always light. PencilKit adapts ink to the current appearance, which would turn black ink white in the dark app UI.
@@ -656,8 +663,10 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         let view = PageTextView(frame:CGRect(x:box.x,y:box.y,width:max(40,box.width),height:box.height))
         view.text = box.text; view.font = .systemFont(ofSize:20); view.textColor = UIColor(hex: "#1E1B1B"); view.backgroundColor = .clear; view.delegate = self
         view.isScrollEnabled = false; view.isUserInteractionEnabled = tool == .text
+        view.fontSize = box.fontSize
+        if let size = box.fontSize { view.font = .systemFont(ofSize: CGFloat(size)) }
         if let color = box.color {
-            view.noteColor = color; view.backgroundColor = UIColor(hex: color); view.font = .systemFont(ofSize: TextBox.stickyFont)
+            view.noteColor = color; view.backgroundColor = UIColor(hex: color); view.font = .systemFont(ofSize: box.fontSize.map { CGFloat($0) } ?? TextBox.stickyFont)
             view.textContainerInset = TextBox.stickyInset; view.layer.cornerRadius = 3
             view.layer.borderColor = UIColor.black.withAlphaComponent(0.08).cgColor; view.layer.borderWidth = 0.5
         }
@@ -669,7 +678,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         saveTexts()
     }
     private func saveTexts() {
-        let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height,color:$0.noteColor) }
+        let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height,color:$0.noteColor,fontSize:$0.fontSize) }
         do { try JSONEncoder().encode(saved).write(to:textURL,options:.atomic) }
         catch { onError?("Text konnte nicht gespeichert werden: \(error.localizedDescription)") }
     }

@@ -75,8 +75,10 @@ enum NotebookPaperSize: String, CaseIterable {
 
 struct NotebookCreationView: View {
     @Environment(\.dismiss) private var dismiss
-    let create: (String, String, String, CGSize) -> Void
+    let create: (String, String, String, CGSize, String?) -> Void
     @State private var title = ""
+    @State private var coverOn = true
+    @State private var coverColor = NotebookCover.colors[0]
     @State private var paper = "grid"
     @State private var paperColor = "#FFFFFF"
     @State private var paperSize = NotebookPaperSize.a4
@@ -88,7 +90,7 @@ struct NotebookCreationView: View {
             HStack {
                 Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 25, weight: .light)).frame(width: 44, height: 44).background(Theme.pill, in: Circle()).overlay { Circle().stroke(.white.opacity(0.1), lineWidth: 0.75) } }
                 Spacer(); Text("Neues Notizbuch").font(.system(size: 17, weight: .semibold)); Spacer()
-                Button { create(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unbenanntes Notizbuch" : title, paper, paperColor, paperSize.size); dismiss() } label: { Image(systemName: "checkmark").font(.system(size: 27, weight: .light)).frame(width: 44, height: 44).background(Color(referenceHex: "#7CAFE7"), in: Circle()) }
+                Button { create(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unbenanntes Notizbuch" : title, paper, paperColor, paperSize.size, coverOn ? coverColor : nil); dismiss() } label: { Image(systemName: "checkmark").font(.system(size: 27, weight: .light)).frame(width: 44, height: 44).background(Color(referenceHex: "#7CAFE7"), in: Circle()) }
             }.padding(10)
             HStack(alignment: .top, spacing: 28) {
                 VStack(spacing: 0) {
@@ -103,7 +105,19 @@ struct NotebookCreationView: View {
                         Divider().padding(.leading, 16)
                         HStack { Text("Sprache"); Spacer(); Text("Auto Detect").foregroundStyle(Theme.secondary); Image(systemName: "chevron.down").font(.system(size: 12)).foregroundStyle(Theme.secondary) }.frame(height: 44).padding(.horizontal, 16)
                         Divider().padding(.leading, 16)
-                        Toggle("Umschlag", isOn: .constant(false)).disabled(true).frame(height: 44).padding(.horizontal, 16)
+                        Toggle("Umschlag", isOn: $coverOn.animation(.easeInOut(duration: 0.2))).frame(height: 44).padding(.horizontal, 16)
+                        if coverOn {
+                            Divider().padding(.leading, 16)
+                            HStack(spacing: 10) {
+                                ForEach(NotebookCover.colors, id: \.self) { color in
+                                    Button { coverColor = color } label: {
+                                        RoundedRectangle(cornerRadius: 4).fill(Color(hex: color)).frame(width: 24, height: 30)
+                                            .overlay(alignment: .trailing) { Rectangle().fill(.black.opacity(0.3)).frame(width: 3).padding(.trailing, 4) }
+                                            .overlay { RoundedRectangle(cornerRadius: 5).stroke(coverColor == color ? Theme.accent : .clear, lineWidth: 2).padding(-3) }
+                                    }.buttonStyle(.solidPlain).accessibilityLabel("Umschlagfarbe")
+                                }
+                            }.frame(height: 48).padding(.horizontal, 16).transition(.opacity)
+                        }
                     }.font(.system(size: 15)).background(Theme.pill, in: RoundedRectangle(cornerRadius: 24))
                     Text("PAPIER-VORLAGEN").font(.system(size: 11)).tracking(0.2).foregroundStyle(Theme.secondary).padding(.leading, 16).offset(y: 5)
                     VStack(spacing: 0) {

@@ -4,6 +4,8 @@ import SwiftUI
     let tool: EditorTool
     @Binding var settings: ToolSettings
     var initiallyScrolled = false
+    var openMath: (() -> Void)? = nil
+    @State private var writingAids = false
     @StateObject private var quickStyles = PenQuickStyleStore()
     @State private var penSettings = false
     @State private var managingStyles = false
@@ -57,9 +59,10 @@ import SwiftUI
                 Button { penSettings = true } label: { settingsRow("Stift-Einstellungen", chevron: true) }
                     .popover(isPresented: $penSettings) { penDetail }
                 rowDivider
-                settingsRow("Schreibhilfen", chevron: true).opacity(0.4)
+                Button { writingAids = true } label: { settingsRow("Schreibhilfen", chevron: true) }
+                    .popover(isPresented: $writingAids) { WritingAidsView(settings: $settings) }
                 rowDivider
-                settingsRow("Mathe-Assistenz", chevron: true).opacity(0.4)
+                Button { openMath?() } label: { settingsRow("Mathe-Assistenz", chevron: true) }
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 26)).padding(.horizontal, 16)
             sectionTitle("Schnellzugriffsstile").padding(.top, 18).padding(.bottom, 12)
             ScrollView(.horizontal, showsIndicators: false) {

@@ -69,15 +69,12 @@ enum NotebookThumbnail {
                 }
                 c.restoreGState()
             } else { PaperView.paint(c, bounds: bounds, paper: page.paper) }
-            for stroke in ink.strokes {
-                c.saveGState(); c.setFillColor(stroke.color.cgColor); c.setStrokeColor(stroke.color.cgColor); c.setLineWidth(stroke.width); c.setLineCap(.round); c.setLineJoin(.round); c.addPath(stroke.path)
-                if stroke.filled { c.fillPath() } else { c.strokePath() }; c.restoreGState()
-            }
+            ink.draw(in: c)
             inkImage?.draw(in: bounds)
             for box in texts {
                 if let color = box.color { UIColor(hex: color).setFill(); UIRectFill(CGRect(x: box.x, y: box.y, width: box.width, height: box.height)) }
                 let inset = box.color == nil ? UIEdgeInsets(top: 8, left: 5, bottom: 0, right: 5) : TextBox.stickyInset
-                (box.text as NSString).draw(in: CGRect(x: box.x + inset.left, y: box.y + inset.top, width: max(1, box.width - inset.left - inset.right), height: box.height - inset.top), withAttributes: [.font: UIFont.systemFont(ofSize: box.color == nil ? 20 : TextBox.stickyFont), .foregroundColor: UIColor(hex: "#1E1B1B")])
+                (box.text as NSString).draw(in: CGRect(x: box.x + inset.left, y: box.y + inset.top, width: max(1, box.width - inset.left - inset.right), height: box.height - inset.top), withAttributes: [.font: UIFont.systemFont(ofSize: box.fontSize.map { CGFloat($0) } ?? (box.color == nil ? 20 : TextBox.stickyFont)), .foregroundColor: UIColor(hex: "#1E1B1B")])
             }
         }
     }
@@ -86,6 +83,8 @@ enum NotebookThumbnail {
 @MainActor struct NotebookPreview: View {
     let page: NotebookPage
     let directory: URL
+    /// Library cards show the notebook's cover when it has one.
+    var cover = false
     @State private var image: UIImage?
     var body: some View {
         Group {
@@ -94,9 +93,43 @@ enum NotebookThumbnail {
         }.clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay { RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.5), lineWidth: 1) }
             .task(id: page) {
+                if cover, NotebookCover.exists(directory), let art = await NotebookCover.image(directory) { image = art; return }
                 if image == nil, let hit = NotebookThumbnail.cached(NotebookThumbnail.key(page: page, directory: directory, width: 160)) { image = hit; return }
                 let rendered = await NotebookThumbnail.image(page: page, directory: directory)
                 if !Task.isCancelled { withAnimation(.easeOut(duration: 0.15)) { image = rendered } }
             }
+    }
+}
+
+/// A notebook's cover, shown in the library instead of its first page like Goodnotes does: the original
+/// Goodnotes cover for imported notebooks, or a plain cloth cover chosen when a notebook is created.
+enum NotebookCover {
+    static let fileName = "cover.jpg"
+    /// Cover colours offered when creating a notebook (Goodnotes' plain covers).
+    static let colors = ["#754000", "#57D9F5", "#2E4A7D", "#C0392B", "#2F7D4A", "#1D1B1B", "#E9B949", "#8E5BB5"]
+    private static let memory = NSCache<NSURL, UIImage>()
+    static func url(_ directory: URL) -> URL { directory.appendingPathComponent(fileName) }
+    static func exists(_ directory: URL) -> Bool { FileManager.default.fileExists(atPath: url(directory).path) }
+    static func image(_ directory: URL) async -> UIImage? {
+        let file = url(directory)
+        if let hit = memory.object(forKey: file as NSURL) { return hit }
+        return await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: file), let image = UIImage(data: data)?.preparingForDisplay() else { return nil }
+            memory.setObject(image, forKey: file as NSURL); return image
+        }.value
+    }
+    /// Solid cloth with the darker elastic band near the right edge.
+    static func make(color: String) -> Data? {
+        let size = CGSize(width: 386, height: 500)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 2; format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            let base = UIColor(hex: color)
+            base.setFill(); context.fill(CGRect(origin: .zero, size: size))
+            var h: CGFloat = 0, sat: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            base.getHue(&h, saturation: &sat, brightness: &b, alpha: &a)
+            UIColor(hue: h, saturation: min(1, sat * 1.1), brightness: b * 0.62, alpha: 1).setFill()
+            context.fill(CGRect(x: 328, y: 0, width: 19, height: size.height))
+        }
+        return image.jpegData(compressionQuality: 0.9)
     }
 }

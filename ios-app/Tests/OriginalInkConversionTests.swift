@@ -100,4 +100,33 @@ final class OriginalInkConversionTests: XCTestCase {
         XCTAssertNil(styles["../x"])
         XCTAssertEqual(styles.count, 3)
     }
+
+    private func point(_ x: Float, _ y: Float) -> Data { field(1, float: x) + field(2, float: y) }
+    private func record(_ body: Data) -> Data { varint(UInt64(body.count)) + body }
+
+    func testPicturesTextsAndStickiesAreReadAndDeletedOnesSkipped() throws {
+        let live = "11111111-1111-4111-8111-111111111111", gone = "22222222-2222-4222-8222-222222222222"
+        let attachment = "33333333-3333-4333-8333-333333333333"
+        func picture(_ id: String) -> Data {
+            field(1, field(1, Data(id.utf8)) + field(3, field(1, point(400, 500)) + field(2, point(200, 100)) + field(3, float: 1.5708)) + field(4, Data(attachment.utf8)))
+        }
+        let runs = field(1, field(1, Data("Hallo Welt".utf8)) + field(2, field(40, float: 14)))
+        let block = Data("bv4-".utf8) + withUnsafeBytes(of: UInt32(runs.count).littleEndian) { Data($0) } + runs + Data("bv4$".utf8)
+        let sticky = field(21, field(1, Data("44444444-4444-4444-8444-444444444444".utf8)) + field(2, int: 35)
+            + field(20, field(1, point(10, 20)) + field(3, float: 1)) + field(21, field(2, point(150, 40)))
+            + field(30, field(1, field(1, field(1, float: 1) + field(2, float: 0.9) + field(3, float: 0.4))))
+            + field(32, field(1, field(2, block))))
+        let tombstone = field(1, Data(gone.utf8)) + field(3, int: 1)
+        let data = record(picture(live)) + record(tombstone) + record(picture(gone)) + record(sticky)
+        let ink = try OriginalInk.read(data, convert: true)
+        XCTAssertEqual(ink.images.count, 1, "the deleted picture is skipped")
+        let image = try XCTUnwrap(ink.images.first)
+        XCTAssertEqual(image.attachment, attachment)
+        XCTAssertEqual(image.center.x, 400, accuracy: 0.01); XCTAssertEqual(image.size.width, 200, accuracy: 0.01)
+        XCTAssertEqual(image.rotation, 1.5708, accuracy: 0.001)
+        let box = try XCTUnwrap(ink.texts.first)
+        XCTAssertEqual(box.text, "Hallo Welt"); XCTAssertEqual(box.x, 10, accuracy: 0.01); XCTAssertEqual(box.width, 150, accuracy: 0.01)
+        XCTAssertEqual(box.fontSize ?? 0, 14, accuracy: 0.01)
+        XCTAssertEqual(box.color, "#FFE566")
+    }
 }

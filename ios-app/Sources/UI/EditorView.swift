@@ -9,6 +9,9 @@ import PDFKit
     @State private var toolPopover: EditorTool?
     @State private var pageIndex = 0
     @State private var panel: EditorPanel?
+    @StateObject private var studyTimer = StudyTimer()
+    @ObservedObject private var ruler = RulerState.shared
+    @State private var studying = false
     @State private var sidebar: EditorPanel?
     @State private var colorPopover = false
     @State private var writingMenu = false
@@ -58,7 +61,13 @@ import PDFKit
         }.ignoresSafeArea(edges: .bottom).background(Theme.top.ignoresSafeArea(edges: .top)).buttonStyle(.solidPlain)
         .overlay { pencilGestures }
         .modifier(EditorPageImport(bookID: bookID, commands: commands, pageIndex: $pageIndex, request: $pageMedia))
+        .overlay { if ruler.visible { RulerOverlay(state: ruler) } }
+        .animation(.easeInOut(duration: 0.2), value: ruler.visible)
+        .overlay(alignment: .bottom) { if studyTimer.visible { StudyTimerPill(timer: studyTimer).padding(.bottom, 28) } }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: studyTimer.visible)
+        .fullScreenCover(isPresented: $studying) { if let item { FlashcardStudyView(item: item, directory: store.directory(bookID)) } }
         .onAppear {
+            if store.openRecorder { store.openRecorder = false; DispatchQueue.main.async { panel = .audio } }
             // Errors can arrive while SwiftUI tears the editor down; publish them on the next run loop turn.
             commands.reportError = { message in DispatchQueue.main.async { store.error = message } }
             commands.didFinishErasing = { if settings.eraserAutoDeselect && settings.tool == .eraser { settings.tool = .pen } }
@@ -114,7 +123,7 @@ import PDFKit
                     switch palette {
                     case .tools: PencilToolPalette(settings: $settings, commands: commands, showColors: { pencilPalette = .colors }, showAttributes: { pencilPalette = .attributes })
                     case .colors: InkColorPalette(settings: $settings)
-                    case .attributes: ToolOptionsView(tool: settings.tool, settings: $settings)
+                    case .attributes: ToolOptionsView(tool: settings.tool, settings: $settings, openMath: { commands.flush(); panel = .math })
                     }
                 }
         }
@@ -166,7 +175,8 @@ import PDFKit
                     HStack(spacing: 0) {
                         iconButton("navbar/sidebar", "Seiten", selected: sidebar == .pages || sidebar == .bookmarks) { sidebar = sidebar == .pages ? nil : .pages }
                         iconButton("navbar/search", "Suchen", selected: sidebar == .search) { sidebar = sidebar == .search ? nil : .search }
-                        iconButton("nexus/agent", "Assistent") {}.disabled(true)
+                        iconButton("nexus/agent", "Assistent", selected: panel == .assistant) { commands.flush(); panel = .assistant }
+                        if item?.kind == .flashcards { Button { commands.flush(); studying = true } label: { Label("Lernen", systemImage: "rectangle.on.rectangle.angled").font(.system(size: 14, weight: .semibold)).padding(.horizontal, 12).frame(height: 32).background(Color(referenceHex: "#263A60"), in: Capsule()) }.accessibilityLabel("Lernset lernen") }
                         iconButton(settings.readOnly ? "newToolbar/document-mode-edit" : "newToolbar/document_mode", "Lesemodus", selected: settings.readOnly) { settings.readOnly.toggle() }
                         Spacer(minLength: 0)
                         Button { commands.toggleKnight?() } label: { BucketIcon().stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)).frame(width: 17, height: 20).frame(width: 44, height: 44) }.accessibilityLabel("Ritter ein- oder ausblenden")
@@ -200,7 +210,7 @@ import PDFKit
                             }.frame(width: 66, height: 44)
                         }
                             .accessibilityLabel("Zubehör").popover(isPresented: $accessories, arrowEdge: .top) {
-                                ReferenceToolMenu(title: "Zubehör", entries: [("Aufnahmen anzeigen", "navbar/recordings"), ("Zoom-Ansicht", "newToolbar/accessories/zoom"), ("Lineal", "newToolbar/accessories/ruler"), ("Zeitmesser", "newToolbar/accessories/timer")], enabled: [0]) { index in accessories = false; if index == 0 { panel = .audio } }
+                                ReferenceToolMenu(title: "Zubehör", entries: [("Aufnahmen anzeigen", "navbar/recordings"), ("Zoom-Ansicht", "newToolbar/accessories/zoom"), ("Lineal", "newToolbar/accessories/ruler"), ("Zeitmesser", "newToolbar/accessories/timer")], enabled: [0, 2, 3]) { index in accessories = false; if index == 0 { panel = .audio } else if index == 2 { ruler.visible.toggle() } else if index == 3 { studyTimer.visible ? studyTimer.close() : studyTimer.start() } }
                             }
                         Color.clear.frame(width: 3, height: 44).allowsHitTesting(false)
                     }.frame(height: 44)
@@ -225,7 +235,7 @@ import PDFKit
         } label: {
             OriginalIcon(name: artwork, size: 24, original: selected && artwork != name).foregroundStyle(selected ? Color(referenceHex: "#1D1B1B") : .white).frame(width: 36, height: 36).background(selected ? Theme.activeTool : .clear, in: RoundedRectangle(cornerRadius: 11)).frame(width: 50, height: 44)
         }.buttonStyle(ToolbarPressStyle()).accessibilityLabel(tool.label).accessibilityAddTraits(settings.tool == tool ? .isSelected : [])
-            .popover(isPresented: Binding(get: { toolPopover == tool }, set: { if !$0 { toolPopover = nil } }), arrowEdge: .top) { ToolOptionsView(tool: tool, settings: $settings) }
+            .popover(isPresented: Binding(get: { toolPopover == tool }, set: { if !$0 { toolPopover = nil } }), arrowEdge: .top) { ToolOptionsView(tool: tool, settings: $settings, openMath: { toolPopover = nil; commands.flush(); panel = .math }) }
     }
     private var floatingControls: some View {
         GeometryReader { geometry in
@@ -418,6 +428,7 @@ import PDFKit
                     List { TextField("Text in PDF-Hintergründen suchen",text:$query).onSubmit { searchPDF() }; ForEach(Array(searchResults.enumerated()),id:\.offset) { _,result in Button { pageIndex = result.0; panel = nil } label: { VStack(alignment:.leading) { Text("Seite \(result.0+1)").font(.caption).foregroundStyle(.secondary); Text(result.1).lineLimit(3) } } } }
                 case .report: List(item?.warnings ?? [],id:\.self) { Text($0) }
                 case .audio: ListenerView()
+                case .assistant, .math: AssistantPanel(page: page, directory: store.directory(bookID), math: p == .math)
                 }
             }.goodnotesSheet().navigationTitle(p.title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.confirmationAction) { Button("Fertig") { panel = nil } } }
         }.presentationDetents([.large])
@@ -431,9 +442,9 @@ import PDFKit
 }
 enum ExportKind { case pdf, native, original }
 enum EditorPanel: String, Identifiable {
-    case pages, bookmarks, search, audio, report
+    case pages, bookmarks, search, audio, report, assistant, math
     var id: String { rawValue }
-    var title: String { switch self { case .pages:return "Seiten"; case .bookmarks:return "Lesezeichen"; case .search:return "Suchen"; case .audio:return "Audio"; case .report:return "Importbericht" } }
+    var title: String { switch self { case .pages:return "Seiten"; case .bookmarks:return "Lesezeichen"; case .search:return "Suchen"; case .audio:return "Audio"; case .report:return "Importbericht"; case .assistant:return "Assistent"; case .math:return "Mathe-Assistenz" } }
 }
 @MainActor struct ShareView: UIViewControllerRepresentable {
     let url:URL

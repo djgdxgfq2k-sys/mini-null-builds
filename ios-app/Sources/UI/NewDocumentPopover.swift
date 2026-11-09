@@ -9,6 +9,9 @@ struct NewDocumentPopover: View {
     let image: () -> Void
     let camera: () -> Void
     let folder: () -> Void
+    var textDocument: () -> Void = {}
+    var quickRecording: () -> Void = {}
+    var flashcards: () -> Void = {}
     var canScan = true
     var canUseCamera = true
 
@@ -17,16 +20,16 @@ struct NewDocumentPopover: View {
             HStack(spacing: 8) {
                 tile("Notizbuch", asset: "notebook", action: notebook)
                 tile("Whiteboard", asset: "canvas", badge: true, action: whiteboard)
-                tile("Text-Dok", asset: "nexus", badge: true, action: {}).disabled(true)
+                tile("Text-Dok", asset: "nexus", badge: true, action: textDocument)
             }
             HStack(spacing: 8) {
                 tile("Importieren", asset: "import", action: importFile)
-                tile("Schnellaufnahme", asset: "add-recording", action: {}).disabled(true)
+                tile("Schnellaufnahme", asset: "add-recording", action: quickRecording)
             }
             VStack(spacing: 0) {
                 row("QuickNote", asset: "newDocumentPopover/quicknote", action: quickNote)
                 row("Dokumente scannen", asset: "newDocumentPopover/scan-document", catalog: OriginalAssets.toolbar, action: scan).disabled(!canScan)
-                row("Lernset", asset: "newDocumentPopover/flashcards", action: {}).disabled(true)
+                row("Lernset", asset: "newDocumentPopover/flashcards", action: flashcards)
                 row("Bild", asset: "newDocumentPopover/image", action: image)
                 row("Foto aufnehmen", asset: "newDocumentPopover/take-photo", action: camera).disabled(!canUseCamera)
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 14))

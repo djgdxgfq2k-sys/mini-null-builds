@@ -30,7 +30,7 @@ struct NotebookPage: Identifiable, Codable, Hashable {
     }
 }
 
-enum NotebookKind: String, Codable { case notebook, whiteboard }
+enum NotebookKind: String, Codable { case notebook, whiteboard, flashcards }
 
 struct LibraryItem: Identifiable, Codable, Equatable {
     var id = UUID().uuidString
@@ -61,6 +61,8 @@ struct ArchiveManifest: Codable {
     @Published var active: String?
     /// Where on screen the notebook being opened was tapped; the editor zooms out of that point.
     var openAnchor: UnitPoint = .center
+    /// A quick recording opens its new notebook with the recorder showing.
+    var openRecorder = false
     @Published var error: String?
     let root: URL
     private var writable = true

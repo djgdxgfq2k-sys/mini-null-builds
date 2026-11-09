@@ -40,7 +40,7 @@ import PDFKit
         for item in store.items where item.id != school.id { store.move(item.id, into: school.id) }
         await capture("library-filter", view: LibraryView(sidebarShown: false, menu: .filter, folderID: school.id).environmentObject(store), size: CGSize(width: 1180, height: 820), topInset: 34)
         await capture("library-layout", view: LibraryView(sidebarShown: false, menu: .layout, folderID: school.id).environmentObject(store), size: CGSize(width: 1180, height: 820), topInset: 34)
-        await capture("new-notebook", view: NotebookCreationView { _, _, _, _ in }, size: CGSize(width: 712, height: 726))
+        await capture("new-notebook", view: NotebookCreationView { _, _, _, _, _ in }, size: CGSize(width: 712, height: 726))
         await capture("new-whiteboard", view: WhiteboardCreationView { _, _, _, _ in }, size: CGSize(width: 712, height: 726))
         await capture("ink-swatches", view: HStack(spacing: 24) { ForEach(Theme.inks, id: \.self) { color in Circle().fill(Color(hex: color)).frame(width: 20, height: 20) } }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.pill), size: CGSize(width: 264, height: 45))
         await capture("ink-palette", view: InkColorPalette(settings: .constant(ToolSettings())), size: CGSize(width: 410, height: 336))
