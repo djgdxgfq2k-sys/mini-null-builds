@@ -600,9 +600,9 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     func updateRenderScale() {
         // Quarter steps keep PencilKit from re-rendering on every tiny zoom change.
         // While a stroke is live PencilKit redraws the whole canvas in one layer; past this size the
-        // existing ink vanished until the Pencil lifted, so the sharp canvas stays within ~4096 pixels.
+        // existing ink could vanish until the Pencil lifted, so the sharp canvas stays within 8192 pixels (sharp up to about 4.8x on A4).
         let longest = max(1, max(document.bounds.width, document.bounds.height) * (window?.screen.scale ?? 2))
-        let budget = max(1, (4096 / longest * 4).rounded(.down) / 4)
+        let budget = max(1, (8192 / longest * 4).rounded(.down) / 4)
         let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
         guard target != renderScale else { return }
         renderScale = target; layoutCanvas(); onRenderScale?()

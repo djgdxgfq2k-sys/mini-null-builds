@@ -92,9 +92,9 @@ import PencilKit
             notebook.scrollViewDidEndZooming(notebook.scroll, with: nil, atScale: 2.5)
             host.view.layoutIfNeeded()
             let document = try XCTUnwrap(canvas.superview)
-            // Sharp up to the live-ink pixel budget (about 4096 px on the long side).
+            // Sharp up to the live-ink pixel budget (8192 px on the long side).
             let longest = max(document.bounds.width, document.bounds.height) * (window.screen.scale)
-            let expected = min(2.5, max(1, (4096 / longest * 4).rounded(.down) / 4))
+            let expected = min(2.5, max(1, (8192 / longest * 4).rounded(.down) / 4))
             XCTAssertEqual(canvas.zoomScale, expected, accuracy: 0.01, "finger=\(finger): ink is not rendered at the on-screen zoom")
             XCTAssertEqual(canvas.frame.width, document.bounds.width, accuracy: 0.5, "finger=\(finger): sharp canvas no longer covers the page")
             XCTAssertEqual(canvas.frame.height, document.bounds.height, accuracy: 0.5)
