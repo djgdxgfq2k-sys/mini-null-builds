@@ -10,7 +10,7 @@
   <key>CFBundleShortVersionString</key><string>0.5.0</string>
   <key>CFBundleVersion</key><string>15</string>
   <key>UILaunchScreen</key><dict/>
-  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><true/></dict>
   <key>UIFileSharingEnabled</key><true/>
   <key>LSSupportsOpeningDocumentsInPlace</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Aufnahme starten, wenn du im Ritter-Menü auf Start tippst.</string>

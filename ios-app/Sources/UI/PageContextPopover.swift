@@ -47,7 +47,7 @@ struct PageContextPopover: View {
                         Text(item.title).font(.system(size: 15)).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }.padding(.horizontal, 14).frame(height: item == .outline ? 66 : 52).contentShape(Rectangle())
-                }.foregroundStyle(item.destructive ? Color(hex: Theme.inks[0]) : .white).disabled(item == .window).opacity(item == .window ? 0.4 : 1).accessibilityHint(item == .copy ? "Seite als PDF kopieren" : "")
+                }.foregroundStyle(item.destructive ? Color(hex: Theme.inks[0]) : .white).disabled(item == .window && !UIApplication.shared.supportsMultipleScenes).opacity(item == .window && !UIApplication.shared.supportsMultipleScenes ? 0.4 : 1).accessibilityHint(item == .copy ? "Seite als PDF kopieren" : "")
                 if item != .copy && item != .trash { Divider().overlay(Theme.border.opacity(0.45)).padding(.leading, 52).padding(.trailing, 16) }
             }
         }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 28)).padding(17).frame(width: 278)

@@ -17,6 +17,23 @@ import UIKit
                     ScreenshotRun.startIfRequested()
                 }
         }
+        // A second window shows one notebook on its own, e.g. next to another one in Split View.
+        WindowGroup("Notizbuch", id: "notebook", for: NotebookWindowTarget.self) { $target in
+            if let target, store.item(target.bookID) != nil {
+                NotebookWindow(target: target).environmentObject(store).preferredColorScheme(.dark).tint(Theme.accent)
+            }
+        }
+    }
+}
+
+struct NotebookWindowTarget: Codable, Hashable { let bookID: String; let pageID: String }
+
+@MainActor struct NotebookWindow: View {
+    let target: NotebookWindowTarget
+    @EnvironmentObject private var store: LibraryStore
+    var body: some View {
+        EditorView(bookID: target.bookID, separateWindow: true, initialPageID: target.pageID)
+            .alert("Hinweis", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }
 }
 

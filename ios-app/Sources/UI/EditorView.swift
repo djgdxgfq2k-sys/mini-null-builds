@@ -3,7 +3,11 @@ import PDFKit
 
 @MainActor struct EditorView: View {
     @EnvironmentObject private var store: LibraryStore
+    @Environment(\.openWindow) private var openWindow
     let bookID: String
+    /// Set when this editor lives in its own window (opened with "In neuem Fenster öffnen").
+    var separateWindow = false
+    var initialPageID: String? = nil
     @StateObject private var commands = CanvasCommands()
     @State private var settings = ToolSettingsStore.load()
     @State private var toolPopover: EditorTool?
@@ -67,6 +71,7 @@ import PDFKit
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: studyTimer.visible)
         .fullScreenCover(isPresented: $studying) { if let item { FlashcardStudyView(item: item, directory: store.directory(bookID)) } }
         .onAppear {
+            if let initialPageID, let index = item?.pages.firstIndex(where: { $0.id == initialPageID }) { pageIndex = index }
             if store.openRecorder { store.openRecorder = false; DispatchQueue.main.async { panel = .audio } }
             // Errors can arrive while SwiftUI tears the editor down; publish them on the next run loop turn.
             commands.reportError = { message in DispatchQueue.main.async { store.error = message } }
@@ -342,6 +347,7 @@ import PDFKit
         case .outline: outlineName = page.outlineTitle ?? "Seite \(index + 1)"; outlineEditing = true
         case .move: movePosition = index; movingPage = true
         case .clear, .trash: destructivePageAction = action
+        case .window: commands.flush(); openWindow(id: "notebook", value: NotebookWindowTarget(bookID: bookID, pageID: page.id))
         default: performPageAction(action, pageID: page.id)
         }
     }
