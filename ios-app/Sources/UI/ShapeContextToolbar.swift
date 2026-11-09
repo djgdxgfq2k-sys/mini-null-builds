@@ -24,7 +24,7 @@ struct ShapeContextToolbar: View {
 struct StrokeOptionsPopover: View {
     @Binding var settings: ToolSettings
     var presetIndex: Int? = nil
-    private var supportsPattern: Bool { [.pen, .pencil, .marker, .geometry, .shapes].contains(settings.tool) }
+    private var supportsPattern: Bool { true }
     var body: some View {
         VStack(spacing: 0) {
             HStack { OriginalIcon(name: "newToolbar/tool_settings", size: 24).frame(width: 44, height: 44).background(Theme.pill, in: Circle()).overlay { Circle().strokeBorder(.white.opacity(0.1), lineWidth: 0.75) }; Spacer(); Text("Stricheinstellungen").font(.system(size: 17, weight: .semibold)); Spacer() }.padding(10)
@@ -35,7 +35,7 @@ struct StrokeOptionsPopover: View {
                             Path { path in path.move(to: CGPoint(x: 0, y: 2)); path.addLine(to: CGPoint(x: 17, y: 2)) }.stroke(Theme.accent, style: StrokeStyle(lineWidth: 1.7, dash: pattern == .solid ? [] : (pattern == .dashed ? [3, 2.5] : [1, 2.5]))).frame(width: 17, height: 4)
                             Text(pattern.rawValue).font(.system(size: 11)).lineLimit(1).frame(width: 70)
                         }.frame(maxWidth: .infinity).frame(height: 94).background((supportsPattern ? settings.strokePattern == pattern : pattern == .solid) ? Theme.pill : .clear, in: RoundedRectangle(cornerRadius: 22))
-                    }.disabled(pattern != .solid && !supportsPattern).opacity(pattern == .solid || supportsPattern ? 1 : 0.4).accessibilityAddTraits(settings.strokePattern == pattern ? .isSelected : [])
+                    }.accessibilityAddTraits(settings.strokePattern == pattern ? .isSelected : [])
                 }
             }.padding(.horizontal, 12).padding(.top, 13)
             Text("STÄRKE DES STIFTES").font(.system(size: 12)).foregroundStyle(Theme.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 27).padding(.top, 32)

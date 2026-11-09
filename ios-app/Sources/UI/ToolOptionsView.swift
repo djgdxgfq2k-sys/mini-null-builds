@@ -177,8 +177,9 @@ import SwiftUI
         VStack(alignment: .leading, spacing: 20) {
             Text("Stift-Einstellungen").font(.system(size: 17, weight: .semibold))
             if tool == .pen && settings.penStyle == .ballpoint { Text("Der Kugelschreiber schreibt mit gleichbleibender Strichstärke.").font(.system(size: 13)).foregroundStyle(Theme.secondary) }
-            Text("Druckempfindlichkeit"); Slider(value: $settings.pressure).disabled(tool == .pen && settings.penStyle == .ballpoint)
-            Text("Schärfe der Spitze"); Slider(value: $settings.sharpness).disabled(tool == .pencil || settings.penStyle == .ballpoint)
+            // Only settings that change the current pen are shown; nothing sits there greyed out.
+            if !(tool == .pen && settings.penStyle == .ballpoint) { Text("Druckempfindlichkeit"); Slider(value: $settings.pressure) }
+            if tool != .pencil && settings.penStyle != .ballpoint { Text("Schärfe der Spitze"); Slider(value: $settings.sharpness) }
             if tool != .pencil && settings.penStyle == .fountain { Text("Rundung der Spitze"); Slider(value: $settings.tipRoundness) }
             if tool != .pencil && settings.penStyle != .ballpoint {
                 Toggle("Stärke nach Geschwindigkeit einstellen", isOn: $settings.reactToSpeed)

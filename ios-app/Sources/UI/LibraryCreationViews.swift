@@ -79,7 +79,9 @@ struct NotebookCreationView: View {
     @State private var title = ""
     @State private var coverOn = true
     @State private var coverColor = NotebookCover.colors[0]
-    @State private var paper = "grid"
+    @State private var paper = UserDefaults.standard.string(forKey: "nullmini.defaultPaper") ?? "grid"
+    @State private var editingTemplates = false
+    @AppStorage("nullmini.language") private var language = "Auto Detect"
     @State private var paperColor = "#FFFFFF"
     @State private var paperSize = NotebookPaperSize.a4
     private let yellowPaper = "display-p3:#EEEEC5"
@@ -103,7 +105,7 @@ struct NotebookCreationView: View {
                     VStack(spacing: 0) {
                         HStack(spacing: 16) { Text("Titel"); TextField("Unbenanntes Notizbuch", text: $title) }.frame(height: 44).padding(.horizontal, 16)
                         Divider().padding(.leading, 16)
-                        HStack { Text("Sprache"); Spacer(); Text("Auto Detect").foregroundStyle(Theme.secondary); Image(systemName: "chevron.down").font(.system(size: 12)).foregroundStyle(Theme.secondary) }.frame(height: 44).padding(.horizontal, 16)
+                        Menu { ForEach(["Auto Detect", "Deutsch", "English", "Français", "Español"], id: \.self) { choice in Button(choice) { language = choice } } } label: { HStack { Text("Sprache"); Spacer(); Text(language).foregroundStyle(Theme.secondary); Image(systemName: "chevron.down").font(.system(size: 12)).foregroundStyle(Theme.secondary) }.frame(height: 44).padding(.horizontal, 16).contentShape(Rectangle()) }
                         Divider().padding(.leading, 16)
                         Toggle("Umschlag", isOn: $coverOn.animation(.easeInOut(duration: 0.2))).frame(height: 44).padding(.horizontal, 16)
                         if coverOn {
@@ -129,7 +131,12 @@ struct NotebookCreationView: View {
             }.padding(.horizontal, 16).padding(.top, 20).padding(.bottom, 17)
             Divider().overlay(Theme.border)
             VStack(alignment: .leading, spacing: 20) {
-                HStack { Text("Papier-Vorlagen").font(.system(size: 20, weight: .semibold)); Spacer(); Text("Bearbeiten").font(.system(size: 15)).foregroundStyle(Theme.accent.opacity(0.5)) }
+                HStack {
+                    Text("Papier-Vorlagen").font(.system(size: 20, weight: .semibold)); Spacer()
+                    if editingTemplates { Button("Als Standard") { UserDefaults.standard.set(paper, forKey: "nullmini.defaultPaper"); editingTemplates = false }.font(.system(size: 15)).foregroundStyle(Theme.accent) }
+                    Button(editingTemplates ? "Fertig" : "Bearbeiten") { withAnimation(.easeInOut(duration: 0.2)) { editingTemplates.toggle() } }.font(.system(size: 15)).foregroundStyle(Theme.accent)
+                }
+                if editingTemplates { Text("Wähle eine Vorlage und tippe auf „Als Standard“: neue Notizbücher beginnen dann damit.").font(.system(size: 13)).foregroundStyle(Theme.secondary) }
                 Text("Herkömmlich").font(.system(size: 18, weight: .semibold))
                 HStack(spacing: 34) {
                     ForEach(papers, id: \.0) { value, label in

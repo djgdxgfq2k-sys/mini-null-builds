@@ -14,6 +14,7 @@ import PDFKit
     @State private var pageIndex = 0
     @State private var panel: EditorPanel?
     @StateObject private var studyTimer = StudyTimer()
+    @StateObject private var zoom = ZoomState()
     @ObservedObject private var ruler = RulerState.shared
     @State private var studying = false
     @State private var sidebar: EditorPanel?
@@ -67,7 +68,14 @@ import PDFKit
         .modifier(EditorPageImport(bookID: bookID, commands: commands, pageIndex: $pageIndex, request: $pageMedia))
         .overlay { if ruler.visible { RulerOverlay(state: ruler) } }
         .animation(.easeInOut(duration: 0.2), value: ruler.visible)
-        .overlay(alignment: .bottom) { if studyTimer.visible { StudyTimerPill(timer: studyTimer).padding(.bottom, 28) } }
+        .overlay(alignment: .bottom) {
+            if zoom.visible, let page {
+                ZoomPanel(state: zoom, commands: commands, settings: settings, page: page, directory: store.directory(bookID))
+                    .frame(height: 300).transition(.move(edge: .bottom))
+            }
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.9), value: zoom.visible)
+        .overlay(alignment: .bottom) { if studyTimer.visible { StudyTimerPill(timer: studyTimer).padding(.bottom, zoom.visible ? 316 : 28) } }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: studyTimer.visible)
         .fullScreenCover(isPresented: $studying) { if let item { FlashcardStudyView(item: item, directory: store.directory(bookID)) } }
         .onAppear {
@@ -215,7 +223,7 @@ import PDFKit
                             }.frame(width: 66, height: 44)
                         }
                             .accessibilityLabel("Zubehör").popover(isPresented: $accessories, arrowEdge: .top) {
-                                ReferenceToolMenu(title: "Zubehör", entries: [("Aufnahmen anzeigen", "navbar/recordings"), ("Zoom-Ansicht", "newToolbar/accessories/zoom"), ("Lineal", "newToolbar/accessories/ruler"), ("Zeitmesser", "newToolbar/accessories/timer")], enabled: [0, 2, 3]) { index in accessories = false; if index == 0 { panel = .audio } else if index == 2 { ruler.visible.toggle() } else if index == 3 { studyTimer.visible ? studyTimer.close() : studyTimer.start() } }
+                                ReferenceToolMenu(title: "Zubehör", entries: [("Aufnahmen anzeigen", "navbar/recordings"), ("Zoom-Ansicht", "newToolbar/accessories/zoom"), ("Lineal", "newToolbar/accessories/ruler"), ("Zeitmesser", "newToolbar/accessories/timer")], enabled: [0, 1, 2, 3]) { index in accessories = false; if index == 0 { panel = .audio } else if index == 1 { commands.flush(); zoom.visible.toggle() } else if index == 2 { ruler.visible.toggle() } else if index == 3 { studyTimer.visible ? studyTimer.close() : studyTimer.start() } }
                             }
                         Color.clear.frame(width: 3, height: 44).allowsHitTesting(false)
                     }.frame(height: 44)

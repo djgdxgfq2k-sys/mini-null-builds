@@ -29,7 +29,8 @@ import FoundationModels
             var parts: [String] = []
             if let image = try? NotebookThumbnail.render(page: page, directory: directory, width: 1600), let cg = image.cgImage {
                 let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
-                request.recognitionLanguages = ["de-DE", "en-US"]
+                let chosen = ["Deutsch": "de-DE", "English": "en-US", "Français": "fr-FR", "Español": "es-ES"][UserDefaults.standard.string(forKey: "nullmini.language") ?? ""]
+                request.recognitionLanguages = (chosen.map { [$0] } ?? []) + ["de-DE", "en-US"].filter { $0 != chosen }
                 try? VNImageRequestHandler(cgImage: cg).perform([request])
                 parts += (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             }

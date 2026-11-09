@@ -3,13 +3,14 @@ import SwiftUI
 struct WritingToolMenu: View {
     let pencil: () -> Void
     let customize: () -> Void
+    var tape: () -> Void = {}
     var body: some View {
         VStack(spacing: 16) {
             Text("Schreibwerkzeug").font(.system(size: 17, weight: .semibold)).frame(height: 32)
             VStack(spacing: 0) {
                 Button(action: pencil) { row("Bleistift", asset: "newToolbar/writing_tools/tools/pencil") }
                 Divider().overlay(Theme.border.opacity(0.4)).padding(.leading, 46)
-                row("Tape", asset: "newToolbar/writing_tools/tools/tape").opacity(0.4)
+                Button(action: tape) { row("Tape", asset: "newToolbar/writing_tools/tools/tape") }
             }.background(Theme.pill, in: RoundedRectangle(cornerRadius: 24))
             Button(action: customize) { Text("Werkzeugleiste anpassen").font(.system(size: 15)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).frame(height: 44) }.background(Theme.pill, in: Capsule())
         }.padding(16).frame(width: 320).foregroundStyle(.white).background(Theme.popover).presentationBackground(Theme.popover).presentationCompactAdaptation(.popover).buttonStyle(.solidPlain)
