@@ -622,9 +622,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         let budget = max(1, (8192 / longest * 4).rounded(.down) / 4)
         let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
         wantedScale = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
-        updateInkDetail()
-        guard target != renderScale else { return }
-        renderScale = target; layoutCanvas(); onRenderScale?()
+        guard target != renderScale else { updateInkDetail(); return }
+        renderScale = target; layoutCanvas(); updateInkDetail(); onRenderScale?()
     }
     /// Beyond PencilKit's pixel budget the committed ink is shown by tiles rendered at the full zoom;
     /// the canvas underneath stays (nearly invisible) to take the Pencil and shows live ink while writing.
