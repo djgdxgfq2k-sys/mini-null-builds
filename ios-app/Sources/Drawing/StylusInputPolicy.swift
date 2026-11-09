@@ -6,7 +6,9 @@ enum StylusPressureMode: String, Codable, CaseIterable {
 
 enum StylusInputPolicy {
     static func drawingTouches(finger: Bool, pencilConnected: Bool) -> [UITouch.TouchType] {
-        if !pencilConnected { return [.direct, .indirectPointer] }
+        // Until a Pencil is known, everything writes, the Pencil included: compatible styluses and the
+        // USB-C Apple Pencil may never report a pairing.
+        if !pencilConnected { return [.pencil, .direct, .indirectPointer] }
         return finger ? [.pencil, .direct, .indirectPointer] : [.pencil]
     }
     static func force(type: UITouch.TouchType, value: CGFloat, maximum: CGFloat, mode: StylusPressureMode) -> CGFloat {

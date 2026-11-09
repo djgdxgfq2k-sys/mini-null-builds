@@ -66,7 +66,7 @@ import UIKit
         XCTAssertEqual((viewport.canvas.tool as? PKInkingTool)?.inkType, .pencil)
         settings.pencilConnected = false; settings.finger = true; coordinator.configure(settings)
         XCTAssertEqual(viewport.canvas.drawingPolicy, .anyInput)
-        XCTAssertFalse(viewport.canvas.drawingGestureRecognizer.allowedTouchTypes.contains(NSNumber(value: UITouch.TouchType.pencil.rawValue)))
+        XCTAssertTrue(viewport.canvas.drawingGestureRecognizer.allowedTouchTypes.contains(NSNumber(value: UITouch.TouchType.pencil.rawValue)), "an unpaired Pencil must still write")
         XCTAssertEqual(viewport.scroll.panGestureRecognizer.minimumNumberOfTouches, 2)
         settings.pencilConnected = true; settings.finger = false; coordinator.configure(settings)
         XCTAssertEqual(viewport.canvas.drawingPolicy, .pencilOnly)

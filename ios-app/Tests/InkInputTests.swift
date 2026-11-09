@@ -124,7 +124,7 @@ import UIKit
         XCTAssertEqual(StylusInputPolicy.force(type: .pencil, value: .nan, maximum: 4, mode: .automatic), 0.5)
         XCTAssertEqual(StylusInputPolicy.drawingTouches(finger: false, pencilConnected: true), [.pencil])
         XCTAssertEqual(StylusInputPolicy.drawingTouches(finger: true, pencilConnected: true), [.pencil, .direct, .indirectPointer])
-        XCTAssertEqual(StylusInputPolicy.drawingTouches(finger: false, pencilConnected: false), [.direct, .indirectPointer])
+        XCTAssertEqual(StylusInputPolicy.drawingTouches(finger: false, pencilConnected: false), [.pencil, .direct, .indirectPointer])
     }
     func testPencilSuspendsPalmScrollingAndBackgroundSavesRealInput() async throws {
         let (root, page, _, coordinator, view) = try workspace()
