@@ -326,7 +326,20 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                         shape = ShapeRecognition.recognize(samples.map(\.point)).map { settings.roundedShapes ? (viewport?.inkInput.snapShape?($0) ?? $0) : $0 }
                     }
                 }
-                rebuilt += InkBuilder.strokes(samples, settings: settings, creationDate: stroke.path.creationDate, seed: stroke.randomSeed, recognizedShape: shape)
+                var made = InkBuilder.strokes(samples, settings: settings, creationDate: stroke.path.creationDate, seed: stroke.randomSeed, recognizedShape: shape)
+                // Keep exactly the thickness that was on screen while writing: scale the rebuilt widths so
+                // their median matches the stroke PencilKit drew.
+                func median(_ values: [CGFloat]) -> CGFloat { let v = values.sorted(); return v.isEmpty ? 0 : v[v.count / 2] }
+                let drawn = median(points.map { finite($0.size.width, 0) })
+                let built = median(made.flatMap { $0.path.map(\.size.width) })
+                if !(settings.tool == .marker && settings.tape), drawn > 0, built > 0, abs(drawn / built - 1) > 0.02 {
+                    let ratio = drawn / built
+                    made = made.map { s in
+                        let controls = s.path.map { p in PKStrokePoint(location: p.location, timeOffset: p.timeOffset, size: CGSize(width: p.size.width * ratio, height: p.size.height * ratio), opacity: p.opacity, force: p.force, azimuth: p.azimuth, altitude: p.altitude) }
+                        return PKStroke(ink: s.ink, path: PKStrokePath(controlPoints: controls, creationDate: s.path.creationDate), transform: s.transform, mask: s.mask, randomSeed: s.randomSeed)
+                    }
+                }
+                rebuilt += made
             }
             InkDiagnostics.log("restyle added=\(added.count) nativeW=\(added.first.map { InkDiagnostics.widths($0) } ?? "-") nativeBox=\(added.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") pts=\(added.first?.path.count ?? 0) t=\(added.first.map { InkDiagnostics.times($0) } ?? "-") rebuilt=\(rebuilt.count) rebuiltW=\(rebuilt.first.map { InkDiagnostics.widths($0) } ?? "-") rebuiltBox=\(rebuilt.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") ink=\(rebuilt.first.map { "\($0.ink.inkType.rawValue) a=\($0.ink.color.cgColor.alpha)" } ?? "-") width=\(settings.width) tool=\(settings.tool.rawValue) style=\(settings.penStyle.rawValue) scale=\(viewport?.renderScale ?? 0) alpha=\(canvas.alpha) overlay=\(viewport?.inkDetail.isHidden == false)")
             // Nothing to show instead: keep what PencilKit wrote rather than lose the stroke.
