@@ -339,8 +339,13 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                         return PKStroke(ink: s.ink, path: PKStrokePath(controlPoints: controls, creationDate: s.path.creationDate), transform: s.transform, mask: s.mask, randomSeed: s.randomSeed)
                     }
                 }
+                // Plain writing stays exactly as PencilKit drew it; only patterns, held shapes and tape rebuild.
+                if settings.strokePattern == .solid && shape == nil && !(settings.tool == .marker && settings.tape) && settings.tool != .shapes { made = [stroke] }
                 rebuilt += made
             }
+            let unchanged = rebuilt.count == added.count && zip(rebuilt, added).allSatisfy { $0.path.creationDate == $1.path.creationDate && $0.path.count == $1.path.count && $0.ink.inkType == $1.ink.inkType && $0.path.first?.size == $1.path.first?.size }
+            let ruler = MainActor.assumeIsolated { RulerState.shared.visible }
+            if unchanged && !ruler { InkDiagnostics.log("kept as drawn"); return }
             InkDiagnostics.log("restyle added=\(added.count) nativeW=\(added.first.map { InkDiagnostics.widths($0) } ?? "-") nativeBox=\(added.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") pts=\(added.first?.path.count ?? 0) t=\(added.first.map { InkDiagnostics.times($0) } ?? "-") rebuilt=\(rebuilt.count) rebuiltW=\(rebuilt.first.map { InkDiagnostics.widths($0) } ?? "-") rebuiltBox=\(rebuilt.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") ink=\(rebuilt.first.map { "\($0.ink.inkType.rawValue) a=\($0.ink.color.cgColor.alpha)" } ?? "-") width=\(settings.width) tool=\(settings.tool.rawValue) style=\(settings.penStyle.rawValue) scale=\(viewport?.renderScale ?? 0) alpha=\(canvas.alpha) overlay=\(viewport?.inkDetail.isHidden == false)")
             // Nothing to show instead: keep what PencilKit wrote rather than lose the stroke.
             guard !rebuilt.isEmpty else { return }
