@@ -58,7 +58,15 @@ enum InkBuilder {
         if [.pen, .shapes].contains(settings.tool), settings.penStyle != .ballpoint, Self.hasFlatPressure(smooth) {
             Self.applySpeedPressure(&smooth)
         }
-        let base = max(0.1, min(100, settings.width))
+        let type: PKInk.InkType
+        switch settings.tool {
+        case .marker: type = .marker
+        case .pencil: type = .pencil
+        default: type = settings.penStyle == .fountain ? .fountainPen : .pen
+        }
+        // Never thinner than PencilKit draws the live line: a 0.05 mm pen showed while writing and then
+        // vanished, because the finished stroke was a fraction of a pixel wide.
+        let base = max(Self.minimumWidth(type), min(100, settings.width))
         var distances = [CGFloat](repeating: 0, count: smooth.count)
         for i in smooth.indices.dropFirst() { distances[i] = distances[i - 1] + hypot(smooth[i].point.x - smooth[i - 1].point.x, smooth[i].point.y - smooth[i - 1].point.y) }
         let total = distances.last ?? 0
@@ -91,12 +99,6 @@ enum InkBuilder {
             }
             return Point(sample: sample, width: width)
         }
-        let type: PKInk.InkType
-        switch settings.tool {
-        case .marker: type = .marker
-        case .pencil: type = .pencil
-        default: type = settings.penStyle == .fountain ? .fountainPen : .pen
-        }
         let color = UIColor(hex: settings.color)
         let ink = PKInk(type, color: settings.tool == .marker ? color.withAlphaComponent(0.35) : color)
         let segments = patterned(points, pattern: settings.strokePattern, width: settings.tool == .marker ? max(12, base * 6) : base)
@@ -113,6 +115,8 @@ enum InkBuilder {
             return PKStroke(ink: ink, path: PKStrokePath(controlPoints: controls, creationDate: creationDate), randomSeed: seed &+ UInt32(index))
         }
     }
+    /// The thinnest line PencilKit draws for this ink.
+    static func minimumWidth(_ type: PKInk.InkType) -> CGFloat { max(0.1, type.validWidthRange.lowerBound) }
     /// `StylusInputPolicy.force` reports exactly 0.5 for input without a pressure sensor; real pressure always varies.
     static func hasFlatPressure(_ samples: [InkSample]) -> Bool {
         samples.count > 2 && samples.allSatisfy { abs($0.force - 0.5) < 0.001 }

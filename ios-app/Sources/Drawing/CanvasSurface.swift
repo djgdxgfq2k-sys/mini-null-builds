@@ -821,7 +821,8 @@ enum StrokeFactory {
 /// Whether PencilKit divides a tool's width by the canvas zoom. The sharp canvas is zoomed to its render
 /// scale, so the tool width is multiplied back when it does; the answer is measured from real strokes.
 enum PencilKitZoom {
-    private static let key = "nullmini.pencilKitDividesByZoom"
+    // v2: the first version learned from strokes PencilKit had clamped to its minimum width and got it wrong.
+    private static let key = "nullmini.pencilKitDividesByZoom.v2"
     static var needsReapply = false
     static var dividesByZoom: Bool {
         get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
@@ -830,7 +831,9 @@ enum PencilKitZoom {
     static func widthFactor(renderScale: CGFloat) -> CGFloat { dividesByZoom ? renderScale : 1 }
     /// Compares the width PencilKit stored with the width it was given, at a zoom where the two answers differ.
     static func learn(from stroke: PKStroke, toolWidth: CGFloat, renderScale: CGFloat) {
-        guard renderScale >= 1.5, toolWidth > 0 else { return }
+        // Only widths PencilKit keeps as given tell anything; clamped ones look like "does not divide".
+        let valid = stroke.ink.inkType.validWidthRange
+        guard renderScale >= 1.5, toolWidth >= valid.lowerBound * 2, toolWidth <= valid.upperBound / 2 else { return }
         let widths = stroke.path.map(\.size.width).sorted()
         guard widths.count >= 5 else { return }
         let ratio = widths[widths.count / 2] / toolWidth

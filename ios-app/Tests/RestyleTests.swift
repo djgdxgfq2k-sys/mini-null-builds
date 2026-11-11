@@ -43,4 +43,14 @@ import PencilKit
         let distances = stroke.path.map { hypot($0.location.x - 200, $0.location.y - 200) }
         XCTAssertLessThan((distances.max() ?? 0) - (distances.min() ?? 0), 4, "the held circle is a clean circle")
     }
+
+    func testThinnestPenStaysVisibleAfterLifting() async throws {
+        var settings = ToolSettings(); settings.tool = .pen; settings.penStyle = .ballpoint; settings.width = 0.1417322856119756
+        let (coordinator, view, root) = try setUp(settings); defer { try? FileManager.default.removeItem(at: root) }
+        let line = (0 ... 30).map { CGPoint(x: 50 + CGFloat($0) * 4, y: 120) }
+        try await write(native(line, created: Date(), duration: 0.3), coordinator: coordinator, view: view)
+        let stroke = try XCTUnwrap(coordinator.drawing.strokes.last)
+        let thinnest = stroke.path.map(\.size.width).min() ?? 0
+        XCTAssertGreaterThanOrEqual(thinnest, InkBuilder.minimumWidth(.pen) - 0.001, "a 0.05 mm stroke must not shrink below what PencilKit showed while writing")
+    }
 }
