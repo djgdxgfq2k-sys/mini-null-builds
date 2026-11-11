@@ -507,6 +507,8 @@ final class PaperView: UIView {
         detail.locked { render(c, bounds: bounds, page: page) }
     }
     private func render(_ c: CGContext, bounds: CGRect, page: NotebookPage) {
+        let bucket = Int(hypot(c.ctm.a, c.ctm.b).rounded())
+        if InkDetailView.loggedScales.insert(1000 + bucket).inserted { InkDiagnostics.log("paper tile scale=\(hypot(c.ctm.a, c.ctm.b))") }
         c.setFillColor(UIColor(hex: page.paperColor ?? "#FFFFFF").cgColor); c.fill(bounds)
         if let p = pdf?.page(at: page.pdfPage) {
             c.saveGState(); c.translateBy(x: 0, y: bounds.height); c.scaleBy(x: 1, y: -1)
@@ -659,6 +661,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         let budget = max(1, (8192 / longest * 4).rounded(.down) / 4)
         let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
         wantedScale = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        InkDiagnostics.log("zoom outer=\(outerZoom) inner=\(scroll.zoomScale) wanted=\(wantedScale) budget=\(budget) target=\(target) render=\(renderScale) overlay=\(wantedScale > target + 0.01)")
         guard target != renderScale else { updateInkDetail(); return }
         renderScale = target; layoutCanvas(); updateInkDetail(); onRenderScale?()
     }
@@ -873,6 +876,7 @@ final class InkDetailView: UIView {
     private let lock = NSLock()
     private var drawing = PKDrawing()
     private var dirty = false
+    nonisolated(unsafe) static var loggedScales = Set<Int>()
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false; overrideUserInterfaceStyle = .light
@@ -889,6 +893,8 @@ final class InkDetailView: UIView {
         lock.lock(); let ink = drawing; lock.unlock()
         guard !ink.strokes.isEmpty, ink.bounds.intersects(rect) else { return }
         let scale = max(1, min(40, hypot(c.ctm.a, c.ctm.b)))
+        let bucket = Int(scale.rounded())
+        if Self.loggedScales.insert(bucket).inserted { InkDiagnostics.log("ink tile scale=\(scale) rect=\(InkDiagnostics.box(rect)) screen=\(UIScreen.main.scale)") }
         ink.paperImage(from: rect, scale: scale).draw(in: rect)
     }
 }
