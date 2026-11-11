@@ -285,6 +285,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             restyleNewStrokes(since: pending.start, lifted: pending.lifted)
         }
         func restyleNewStrokes(since start: PKDrawing, lifted: Date = Date()) {
+            InkDiagnostics.log("restyle start canvas=\(canvas?.drawing.strokes.count ?? -1) start=\(start.strokes.count) writable=\(writable) tool=\(currentSettings?.tool.rawValue ?? "-") appleInk=\(currentSettings?.appleInk ?? false)")
             guard let canvas, writable, let settings = currentSettings, !settings.appleInk || settings.tape,
                   [.pen, .pencil, .marker, .shapes].contains(settings.tool) else { return }
             let now = canvas.drawing
@@ -327,6 +328,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 }
                 rebuilt += InkBuilder.strokes(samples, settings: settings, creationDate: stroke.path.creationDate, seed: stroke.randomSeed, recognizedShape: shape)
             }
+            InkDiagnostics.log("restyle added=\(added.count) nativeW=\(added.first.map { InkDiagnostics.widths($0) } ?? "-") nativeBox=\(added.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") pts=\(added.first?.path.count ?? 0) t=\(added.first.map { InkDiagnostics.times($0) } ?? "-") rebuilt=\(rebuilt.count) rebuiltW=\(rebuilt.first.map { InkDiagnostics.widths($0) } ?? "-") rebuiltBox=\(rebuilt.first.map { InkDiagnostics.box($0.renderBounds) } ?? "-") ink=\(rebuilt.first.map { "\($0.ink.inkType.rawValue) a=\($0.ink.color.cgColor.alpha)" } ?? "-") width=\(settings.width) tool=\(settings.tool.rawValue) style=\(settings.penStyle.rawValue) scale=\(viewport?.renderScale ?? 0) alpha=\(canvas.alpha) overlay=\(viewport?.inkDetail.isHidden == false)")
             // Nothing to show instead: keep what PencilKit wrote rather than lose the stroke.
             guard !rebuilt.isEmpty else { return }
             // Take PencilKit's own undo step back so one undo removes the whole stroke.
@@ -338,6 +340,10 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             if canvas.drawing.strokes.count != start.strokes.count { canvas.drawing = start }
             drawing = start
             viewport?.inkInput.onCommit?(rebuilt)
+            InkDiagnostics.log("after commit strokes=\(drawing.strokes.count) canvas=\(canvas.drawing.strokes.count) start=\(start.strokes.count) undo=\(canvas.undoManager?.canUndo ?? false)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self, weak canvas] in
+                InkDiagnostics.log("1s later strokes=\(self?.drawing.strokes.count ?? -1) canvas=\(canvas?.drawing.strokes.count ?? -1) alpha=\(canvas?.alpha ?? -1) hidden=\(canvas?.isHidden ?? true) overlay=\(self?.viewport?.inkDetail.isHidden == false)")
+            }
             // If the rebuilt strokes did not land, put PencilKit's stroke back instead of losing it.
             if drawing.strokes.count <= start.strokes.count, !(rebuilt.count == 1 && TapeInk.isProbe(rebuilt[0])) {
                 drawing = now; canvas.drawing = now; viewport?.inkDetail.update(now); persist()
@@ -360,6 +366,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            InkDiagnostics.log("end tool=\(currentSettings?.tool.rawValue ?? "-") strokes=\(canvasView.drawing.strokes.count) start=\(toolStart?.strokes.count ?? -1)")
             if let start = toolStart { toolStart = nil; pendingRestyle = (start, Date()) }
             drawing = canvasView.drawing; persist()
             finishToolUse()
@@ -866,4 +873,25 @@ final class InkDetailView: UIView {
         let scale = max(1, min(40, hypot(c.ctm.a, c.ctm.b)))
         ink.paperImage(from: rect, scale: scale).draw(in: rect)
     }
+}
+
+/// Temporary on-device log (Documents/ink-diagnostics.log) to find where strokes get lost.
+enum InkDiagnostics {
+    private static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ink-diagnostics.log")
+    static func log(_ line: String) {
+        let text = ISO8601DateFormatter().string(from: Date()) + " " + line + "
+"
+        guard let data = text.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            if (try? handle.seekToEnd()) ?? 0 > 2_000_000 { return }
+            try? handle.write(contentsOf: data)
+        } else { try? data.write(to: url) }
+    }
+    static func widths(_ s: PKStroke) -> String {
+        let w = s.path.map(\.size.width)
+        return String(format: "%.2f-%.2f", w.min() ?? 0, w.max() ?? 0)
+    }
+    static func times(_ s: PKStroke) -> String { String(format: "%.3f-%.3f", s.path.first?.timeOffset ?? -1, s.path.last?.timeOffset ?? -1) }
+    static func box(_ r: CGRect) -> String { String(format: "%.0f,%.0f %.0fx%.0f", r.minX, r.minY, r.width, r.height) }
 }
