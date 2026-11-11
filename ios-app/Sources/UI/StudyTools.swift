@@ -65,9 +65,13 @@ import FoundationModels
     let page: NotebookPage?
     let directory: URL
     var math = false
+    var commands: CanvasCommands? = nil
     @StateObject private var assistant = PageAssistant()
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if !math, let page, let commands {
+                NoteAgentSection(commands: commands, page: page, directory: directory, pageText: assistant.pageText)
+            }
             HStack(spacing: 8) {
                 Image(systemName: math ? "function" : "sparkles").foregroundStyle(Theme.accent)
                 Text(math ? "Prüft Rechnungen auf dieser Seite." : "Fragen zu dieser Seite stellen.").font(.subheadline)

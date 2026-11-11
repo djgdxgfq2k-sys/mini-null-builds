@@ -48,14 +48,27 @@ enum ExtensionAPI {
     @State private var token = SecureStore.get("aiToken")
     @State private var user = SecureStore.get("serverUser")
     @State private var password = SecureStore.get("serverPassword")
+    @State private var agentHost = AgentSettings.load().host
+    @State private var agentPort = String(AgentSettings.load().port)
+    @State private var agentToken = SecureStore.get(AgentSettings.tokenKey)
     @State private var message = ""
     var body:some View {
         Form {
+            Section("Notiz-Agent (Tailscale)") {
+                TextField("Tailscale-IP oder Name des Servers",text:$agentHost).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("Port",text:$agentPort).keyboardType(.numberPad)
+                SecureField("Agent-Token",text:$agentToken)
+                Text("Der Token steht auf dem Server in C:\\ipad-ai-stack\\secrets\\gateway_token.txt. Die Verbindung läuft verschlüsselt über Tailscale.").font(.footnote).foregroundStyle(.secondary)
+            }
             Section("KI-Dienst") { TextField("HTTPS-Adresse",text:$ai).textInputAutocapitalization(.never).autocorrectionDisabled(); SecureField("API-Token",text:$token); Text("Nur wenn du KI-Text oder Solve Here startest, wird deine Eingabe an diesen Dienst gesendet.").font(.footnote).foregroundStyle(.secondary) }
             Section("Dell iDRAC / Redfish") { TextField("https://mein-server",text:$server).textInputAutocapitalization(.never).autocorrectionDisabled(); TextField("Benutzername",text:$user).textInputAutocapitalization(.never); SecureField("Passwort",text:$password) }
             Button("Verbindungen speichern") {
                 do {
                     for value in [ai,server] where !value.isEmpty { guard let url = URL(string:value),url.scheme == "https",url.host != nil,url.user == nil,url.password == nil else { throw NotebookError.invalid("Bitte eine gültige HTTPS-Adresse verwenden.") } }
+                    let host = agentHost.trimmingCharacters(in:.whitespaces)
+                    guard let port = Int(agentPort), (1...65535).contains(port), !host.contains("/"), !host.contains(" ") else { throw NotebookError.invalid("Bitte Server-Adresse und Port des Notiz-Agenten prüfen.") }
+                    try SecureStore.set(agentToken.trimmingCharacters(in:.whitespacesAndNewlines),key:AgentSettings.tokenKey)
+                    UserDefaults.standard.set(host,forKey:AgentSettings.hostKey); UserDefaults.standard.set(port,forKey:AgentSettings.portKey)
                     try SecureStore.set(token,key:"aiToken"); try SecureStore.set(user,key:"serverUser"); try SecureStore.set(password,key:"serverPassword")
                     UserDefaults.standard.set(ai,forKey:"aiEndpoint"); UserDefaults.standard.set(server,forKey:"serverEndpoint"); message = "Gespeichert."
                 } catch { message = error.localizedDescription }

@@ -13,7 +13,8 @@
   <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><true/></dict>
   <key>UIFileSharingEnabled</key><true/>
   <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>Aufnahme starten, wenn du im Ritter-Menü auf Start tippst.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Aufnahme starten, wenn du im Ritter-Menü auf Start tippst oder dem Notiz-Agenten eine Frage sprichst. Die Sprache wird auf dem iPad erkannt.</string>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSSpeechRecognitionUsageDescription</key><string>Deine gestartete Aufnahme lokal transkribieren.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Deinen unter Verbindungen eingetragenen iDRAC-Server erreichen.</string>
   <key>NSCameraUsageDescription</key><string>Dokumente scannen oder ein Foto für dein Notizbuch aufnehmen.</string>

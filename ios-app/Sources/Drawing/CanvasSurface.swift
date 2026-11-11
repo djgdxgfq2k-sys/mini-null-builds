@@ -102,6 +102,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
     func redo() { target?.perform { [weak self] in self?.target?.canvas?.undoManager?.redo(); self?.refreshUndo() } }
     func snapshot() -> PKDrawing { target?.drawing ?? PKDrawing() }
     func append(_ strokes: [PKStroke]) { target?.append(strokes) }
+    func appendStreaming(_ strokes: [PKStroke], startsUndoGroup: Bool) { target?.appendStreaming(strokes, startsUndoGroup: startsUndoGroup) }
     func flush() { target?.viewport?.inkInput.finishPendingStroke(); target?.persist() }
     func addStickyNote() { target?.viewport?.addStickyNote() }
     func clear(_ kind: ClearKind) { target?.clear(kind) }
@@ -423,6 +424,17 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             perform { [weak self] in
                 guard let self, let canvas = self.canvas, self.writable else { return }
                 self.replaceByUserCommand(PKDrawing(strokes: self.drawing.strokes + strokes), canvas: canvas)
+            }
+        }
+        /// Appends strokes that arrive in pieces (the note agent writing word by word) as ONE undo step:
+        /// only the first piece registers undo, which then removes the whole answer.
+        func appendStreaming(_ strokes: [PKStroke], startsUndoGroup: Bool) {
+            perform { [weak self] in
+                guard let self, let canvas = self.canvas, self.writable, !strokes.isEmpty else { return }
+                let next = PKDrawing(strokes: self.drawing.strokes + strokes)
+                if startsUndoGroup { self.replaceByUserCommand(next, canvas: canvas); return }
+                self.drawing = next; canvas.drawing = next; self.viewport?.inkDetail.update(next)
+                self.schedulePersist(); self.commands?.refreshUndo()
             }
         }
         private func replaceByUserCommand(_ next: PKDrawing, canvas: PKCanvasView) {

@@ -461,7 +461,7 @@ import PDFKit
                     List { TextField("Text in PDF-Hintergründen suchen",text:$query).onSubmit { searchPDF() }; ForEach(Array(searchResults.enumerated()),id:\.offset) { _,result in Button { pageIndex = result.0; panel = nil } label: { VStack(alignment:.leading) { Text("Seite \(result.0+1)").font(.caption).foregroundStyle(.secondary); Text(result.1).lineLimit(3) } } } }
                 case .report: List(item?.warnings ?? [],id:\.self) { Text($0) }
                 case .audio: ListenerView()
-                case .assistant, .math: AssistantPanel(page: page, directory: store.directory(bookID), math: p == .math)
+                case .assistant, .math: AssistantPanel(page: page, directory: store.directory(bookID), math: p == .math, commands: commands)
                 }
             }.goodnotesSheet().navigationTitle(p.title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement:.confirmationAction) { Button("Fertig") { panel = nil } } }
         }.presentationDetents([.large])
