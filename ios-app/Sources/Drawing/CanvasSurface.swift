@@ -459,8 +459,8 @@ final class SharpDetailView: UIView {
         backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         if let tiled = layer as? CATiledLayer {
-            // Detail from 1x up to 16x the page size: iPad screens are 2x and the notebook zooms up to ~8x.
-            tiled.levelsOfDetail = 5; tiled.levelsOfDetailBias = 4
+            // Detail up to 32x the page size: the 2x iPad screen at the deepest 10x zoom needs 20x.
+            tiled.levelsOfDetail = 7; tiled.levelsOfDetailBias = 5
             tiled.tileSize = CGSize(width: 512, height: 512)
         }
     }
@@ -876,7 +876,7 @@ final class InkDetailView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false; overrideUserInterfaceStyle = .light
-        if let tiled = layer as? CATiledLayer { tiled.levelsOfDetail = 5; tiled.levelsOfDetailBias = 4; tiled.tileSize = CGSize(width: 512, height: 512) }
+        if let tiled = layer as? CATiledLayer { tiled.levelsOfDetail = 7; tiled.levelsOfDetailBias = 5; tiled.tileSize = CGSize(width: 512, height: 512) }
     }
     required init?(coder: NSCoder) { nil }
     func update(_ next: PKDrawing) {
