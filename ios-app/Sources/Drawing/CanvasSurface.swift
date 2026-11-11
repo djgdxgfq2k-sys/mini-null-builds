@@ -879,8 +879,7 @@ final class InkDetailView: UIView {
 enum InkDiagnostics {
     private static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ink-diagnostics.log")
     static func log(_ line: String) {
-        let text = ISO8601DateFormatter().string(from: Date()) + " " + line + "
-"
+        let text = ISO8601DateFormatter().string(from: Date()) + " " + line + String(UnicodeScalar(10))
         guard let data = text.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }
