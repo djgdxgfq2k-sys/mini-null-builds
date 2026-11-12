@@ -50,7 +50,15 @@ import PDFKit
     }
     private var item: LibraryItem? { store.item(bookID) }
     private var page: NotebookPage? { guard let pages = item?.pages, pages.indices.contains(pageIndex) else { return nil }; return pages[pageIndex] }
+    // Split in two so the type checker can handle the long modifier chain.
     var body: some View {
+        mainBody
+            .onChange(of: pageIndex) { _, index in UserDefaults.standard.set(index, forKey: "nullmini.lastPage." + bookID) }
+            .onChange(of: item?.pages.count) { _, count in pageIndex = min(pageIndex, max(0, (count ?? 1) - 1)) }
+            .onChange(of: query) { _, _ in searchTask?.cancel(); searchResults = [] }
+            .onDisappear { searchTask?.cancel(); commands.flush() }
+    }
+    private var mainBody: some View {
         VStack(spacing: 0) {
             tabs
             toolbar
@@ -99,10 +107,6 @@ import PDFKit
         .onChange(of: settings.tool) { old, new in pencilHistory.record(from: old, to: new) }
         .onChange(of: settings.readOnly) { _, value in if value { pencilPalette = nil } }
         .onChange(of: settings) { _, value in ToolSettingsStore.save(value) }
-        .onChange(of: pageIndex) { _, index in UserDefaults.standard.set(index, forKey: "nullmini.lastPage." + bookID) }
-        .onChange(of: item?.pages.count) { _, count in pageIndex = min(pageIndex, max(0, (count ?? 1) - 1)) }
-        .onChange(of: query) { _, _ in searchTask?.cancel(); searchResults = [] }
-        .onDisappear { searchTask?.cancel(); commands.flush() }
         .sheet(item: $panel) { p in sheet(p) }
         .sheet(isPresented: $customizingToolbar) { ToolbarCustomizationView(settings: $settings) }
         .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }
