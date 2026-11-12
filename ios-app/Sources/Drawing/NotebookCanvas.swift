@@ -125,9 +125,12 @@ import PencilKit
             entry.viewport.canvas.delegate = nil; entry.viewport.content.removeFromSuperview(); entries.removeValue(forKey: id)
         }
         for page in pages[lower...upper] where entries[page.id] == nil {
-            let viewport = PageViewport(page: page, directory: directory)
-            let coordinator = CanvasSurface.Coordinator(page: page, directory: directory, commands: commands)
-            coordinator.attach(viewport)
+            let (viewport, coordinator) = HangMonitor.measure("build page") { () -> (PageViewport, CanvasSurface.Coordinator) in
+                let viewport = PageViewport(page: page, directory: directory)
+                let coordinator = CanvasSurface.Coordinator(page: page, directory: directory, commands: commands)
+                coordinator.attach(viewport)
+                return (viewport, coordinator)
+            }
             coordinator.onActivate = { [weak self] in self?.select(page.id, notify: true) }
             stack.addSubview(viewport.content)
             viewport.content.frame = pageFrames[page.id] ?? CGRect(origin: .zero, size: page.size)
@@ -223,5 +226,5 @@ import PencilKit
             entry.viewport.outerZoom = pageFrames[entry.page.id]?.intersects(visible) == true ? scroll.zoomScale : 1
         }
     }
-    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateVisiblePage() }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { HangMonitor.shared.lastScroll = CACurrentMediaTime(); updateVisiblePage() }
 }

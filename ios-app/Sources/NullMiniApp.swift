@@ -16,6 +16,7 @@ import UIKit
                 .onAppear {
                     if ProcessInfo.processInfo.arguments.contains("--notebook"), let item = store.items.first(where: { !$0.folder }) { store.open(item.id) }
                     ScreenshotRun.startIfRequested()
+                    HangMonitor.shared.start()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background { do { try store.save() } catch { store.error = error.localizedDescription } }
@@ -57,6 +58,7 @@ struct NotebookWindowTarget: Codable, Hashable { let bookID: String; let pageID:
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: store.active)
+        .onChange(of: store.active, initial: true) { _, id in HangMonitor.shared.context = id == nil ? "library" : "editor \(store.item(id)?.pages.count ?? 0) pages" }
         .alert("Hinweis",isPresented:Binding(get:{ store.error != nil },set:{ if !$0 {store.error = nil} })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }
 }

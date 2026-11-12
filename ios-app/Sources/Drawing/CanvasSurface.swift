@@ -995,3 +995,32 @@ enum InkDiagnostics {
     static func times(_ s: PKStroke) -> String { String(format: "%.3f-%.3f", s.path.first?.timeOffset ?? -1, s.path.last?.timeOffset ?? -1) }
     static func box(_ r: CGRect) -> String { String(format: "%.0f,%.0f %.0fx%.0f", r.minX, r.minY, r.width, r.height) }
 }
+
+/// Temporary: logs every frame that takes longer than 80 ms, with what the app was doing, to find stutters on the device.
+@MainActor final class HangMonitor: NSObject {
+    static let shared = HangMonitor()
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    /// Short description of the current screen and activity.
+    var context = "start"
+    var lastScroll: CFTimeInterval = 0
+    func start() {
+        guard link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:))); l.add(to: .main, forMode: .common); link = l
+    }
+    @objc private func tick(_ l: CADisplayLink) {
+        defer { last = l.timestamp }
+        guard last > 0 else { return }
+        let gap = l.timestamp - last
+        guard gap > 0.08, UIApplication.shared.applicationState == .active else { return }
+        let scrolling = l.timestamp - lastScroll < 0.3 ? " scrolling" : ""
+        InkDiagnostics.log(String(format: "hang %.0f ms in %@%@", gap * 1000, context, scrolling))
+    }
+    /// Times a block on the main thread and logs it when it is slow.
+    static func measure<T>(_ label: String, _ body: () -> T) -> T {
+        let start = CACurrentMediaTime(); let result = body()
+        let ms = (CACurrentMediaTime() - start) * 1000
+        if ms > 16 { InkDiagnostics.log(String(format: "slow %@ %.0f ms", label, ms)) }
+        return result
+    }
+}
