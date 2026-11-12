@@ -532,7 +532,7 @@ final class PaperView: UIView {
     var page: NotebookPage {
         didSet {
             guard page.paper != oldValue.paper || page.paperColor != oldValue.paperColor || page.nativeSize != oldValue.nativeSize || page.pdf != oldValue.pdf || page.pdfPage != oldValue.pdfPage else { return }
-            let page = page; detail.locked { tilePage = page }; setNeedsDisplay()
+            let page = page; detail.locked { tilePage = page }; setNeedsDisplay(); refreshBase()
         }
     }
     private var tilePage: NotebookPage
@@ -545,11 +545,36 @@ final class PaperView: UIView {
         self.page = page; tilePage = page
         pdf = page.pdf.flatMap { Self.document(directory.appendingPathComponent($0)) }
         super.init(frame: CGRect(origin: .zero, size: page.nativeSize)); backgroundColor = .white
-        contentMode = .redraw
+        contentMode = .scaleToFill
         detail.frame = bounds; addSubview(detail)
+        backgroundColor = UIColor(hex: page.paperColor ?? "#FFFFFF")
+        refreshBase()
     }
-    override func setNeedsDisplay() { super.setNeedsDisplay(); detail.setNeedsDisplay() }
+    override func setNeedsDisplay() { detail.setNeedsDisplay() }
     required init?(coder: NSCoder) { nil }
+    /// The page used to draw itself in full on the main thread whenever it appeared, which made scrolling
+    /// through zoomed-out notebooks stutter (~100 ms per page, logged on the device). A small preview is
+    /// now rendered in the background as the layer's contents; the sharp tiles draw over it.
+    private static let baseQueue: OperationQueue = { let q = OperationQueue(); q.maxConcurrentOperationCount = 2; q.qualityOfService = .userInitiated; return q }()
+    private var baseGeneration = 0
+    private func refreshBase() {
+        baseGeneration += 1
+        let generation = baseGeneration, page = page, size = page.nativeSize
+        backgroundColor = UIColor(hex: page.paperColor ?? "#FFFFFF")
+        guard size.width > 0, size.height > 0 else { return }
+        Self.baseQueue.addOperation { [weak self] in
+            guard let self else { return }
+            let scale = min(1.5, 900 / max(size.width, size.height))
+            let format = UIGraphicsImageRendererFormat(); format.scale = scale; format.opaque = true
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                self.detail.locked { self.render(context.cgContext, bounds: CGRect(origin: .zero, size: size), page: page) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.baseGeneration == generation else { return }
+                self.layer.contents = image.cgImage; self.layer.contentsGravity = .resize
+            }
+        }
+    }
     /// Imported notebooks share one background PDF across many pages; open each file only once.
     private static let documents = NSCache<NSURL, PDFDocument>()
     private static let pdfLock = NSLock()
@@ -557,11 +582,6 @@ final class PaperView: UIView {
         if let cached = documents.object(forKey: url as NSURL) { return cached }
         guard let document = PDFDocument(url: url) else { return nil }
         documents.setObject(document, forKey: url as NSURL); return document
-    }
-    override func draw(_ rect: CGRect) {
-        guard let c = UIGraphicsGetCurrentContext() else { return }
-        let page = page, bounds = bounds
-        detail.locked { render(c, bounds: bounds, page: page) }
     }
     private func render(_ c: CGContext, bounds: CGRect, page: NotebookPage) {
         let bucket = Int(hypot(c.ctm.a, c.ctm.b).rounded())

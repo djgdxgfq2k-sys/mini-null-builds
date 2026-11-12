@@ -393,11 +393,8 @@ final class OriginalInkView: UIView {
     }
     override init(frame: CGRect) { super.init(frame: frame); detail.frame = bounds; addSubview(detail) }
     required init?(coder: NSCoder) { nil }
-    override func setNeedsDisplay() { super.setNeedsDisplay(); detail.setNeedsDisplay() }
-    override func draw(_ rect: CGRect) {
-        guard let c = UIGraphicsGetCurrentContext() else { return }
-        Self.render(c, ink: ink)
-    }
+    // Only the tiles draw (on background threads): a full main-thread draw stalled scrolling.
+    override func setNeedsDisplay() { detail.setNeedsDisplay() }
     private static func render(_ c: CGContext, ink: OriginalInk) { ink.draw(in: c) }
 }
 
