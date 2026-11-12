@@ -116,10 +116,9 @@ import PDFKit
                 commands.afterInput { do { try PageEditing.setOutline(title, pageID: actionPageID, bookID: bookID, store: store) } catch { store.error = error.localizedDescription } }
             }
         }
-        .confirmationDialog(destructivePageAction == .clear ? "Seite leeren?" : "Seite entfernen?", isPresented: Binding(get: { destructivePageAction != nil }, set: { if !$0 { destructivePageAction = nil } }), titleVisibility: .visible, presenting: destructivePageAction) { action in
-            Button(action == .clear ? "Seite leeren" : "In den Papierkorb", role: .destructive) { if let actionPageID { performPageAction(action, pageID: actionPageID) }; destructivePageAction = nil }
-            Button("Abbrechen", role: .cancel) { destructivePageAction = nil }
-        } message: { _ in Text("Die vorherige Seite lässt sich über das Seitenmenü wiederherstellen.") }
+        .confirmationDialog(destructiveTitle, isPresented: destructiveShown, titleVisibility: .visible, presenting: destructivePageAction) { (action: PageMenuAction) in
+            destructiveButtons(action)
+        } message: { (_: PageMenuAction) in Text("Die vorherige Seite lässt sich über das Seitenmenü wiederherstellen.") }
         .sheet(isPresented: $movingPage) {
             NavigationStack {
                 Form {
@@ -378,6 +377,15 @@ import PDFKit
     private func iconButton(_ name: String, _ label: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
         let canvas: CGFloat = name == "navbar/search" ? 44 : (name == "navbar/microphone" ? 36 : 24)
         return Button(action: action) { OriginalIcon(name: name, size: canvas).frame(width: 36, height: 36).background(selected ? Color(referenceHex: "#263A60") : .clear, in: RoundedRectangle(cornerRadius: 11)).frame(width: 44, height: 44) }.buttonStyle(ToolbarPressStyle()).accessibilityLabel(label)
+    }
+    private var destructiveTitle: String { destructivePageAction == .clear ? "Seite leeren?" : "Seite entfernen?" }
+    private var destructiveShown: Binding<Bool> { Binding(get: { destructivePageAction != nil }, set: { if !$0 { destructivePageAction = nil } }) }
+    @ViewBuilder private func destructiveButtons(_ action: PageMenuAction) -> some View {
+        Button(action == .clear ? "Seite leeren" : "In den Papierkorb", role: .destructive) {
+            if let actionPageID { performPageAction(action, pageID: actionPageID) }
+            destructivePageAction = nil
+        }
+        Button("Abbrechen", role: .cancel) { destructivePageAction = nil }
     }
     private func go(_ amount:Int) { commands.flush(); pageIndex = max(0,min((item?.pages.count ?? 1)-1,pageIndex+amount)) }
     private func handlePageAction(_ action: PageMenuAction, index: Int) {
