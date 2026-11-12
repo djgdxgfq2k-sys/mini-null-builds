@@ -79,6 +79,7 @@ jobs:
           name: NullMini-ipa
           path: NullMini.ipa
           if-no-files-found: error
+          retention-days: 3
 
       # Echter App-Code auf einem iPad-Simulator: Server-Paket entpacken, installieren, Striche prüfen.
       # Die IPA ist oben schon hochgeladen; ein roter Test macht den Lauf trotzdem rot.
@@ -112,6 +113,7 @@ jobs:
           name: ipad-reference-captures
           path: ios-app/build-tests/reference-captures
           if-no-files-found: ignore
+          retention-days: 1
 
       - name: Build-Log hochladen
         if: always()
@@ -122,3 +124,4 @@ jobs:
             ios-app/xcodebuild.log
             ios-app/xcodebuild-test.log
           if-no-files-found: ignore
+          retention-days: 1
