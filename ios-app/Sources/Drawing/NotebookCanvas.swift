@@ -32,6 +32,8 @@ import PencilKit
     private var entries: [String: Entry] = [:]
     private var placeholders: [String: UIView] = [:]
     private var pageFrames: [String: CGRect] = [:]
+    private var orderedFrames: [CGRect] = []
+    private var retainedRange: ClosedRange<Int>?
     private var currentSettings = ToolSettings()
     private var pages: [NotebookPage] = []
     private let directory: URL
@@ -40,6 +42,7 @@ import PencilKit
     private var lastSize = CGSize.zero
     private var fitted = false
     private var changingLayout = false
+    private var backgroundObserver: NSObjectProtocol?
     var onVisiblePage: ((Int) -> Void)?
 
     init(directory: URL, commands: CanvasCommands) {
@@ -51,19 +54,25 @@ import PencilKit
         scroll.panGestureRecognizer.minimumNumberOfTouches = 2
         scroll.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue), NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         scroll.alwaysBounceVertical = true; scroll.showsHorizontalScrollIndicator = false
+        backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self else { return }; self.flush() }
+        }
     }
+    deinit { if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) } }
     required init?(coder: NSCoder) { nil }
 
     func synchronize(pages: [NotebookPage], settings: ToolSettings, selected: Int) {
+        guard pages != self.pages || settings != currentSettings || visiblePageIndex != selected else { return }
         changingLayout = true
         defer { changingLayout = false }
         currentSettings = settings
         let ids = Set(pages.map(\.id))
         for id in Array(entries.keys) where !ids.contains(id) {
-            if let entry = entries.removeValue(forKey: id) { entry.coordinator.persist(); entry.viewport.canvas.delegate = nil; entry.viewport.content.removeFromSuperview() }
+            if let entry = entries.removeValue(forKey: id) { entry.viewport.endEditing(true); entry.coordinator.persist(force: false); entry.viewport.canvas.delegate = nil; entry.viewport.content.removeFromSuperview() }
         }
         for id in Array(placeholders.keys) where !ids.contains(id) { placeholders.removeValue(forKey: id)?.removeFromSuperview() }
         let layoutChanged = self.pages.count != pages.count || zip(self.pages, pages).contains { before, after in before.id != after.id || before.size != after.size }
+        if self.pages.map(\.id) != pages.map(\.id) { retainedRange = nil }
         self.pages = pages
         for page in pages {
             if placeholders[page.id] == nil {
@@ -99,15 +108,20 @@ import PencilKit
         var lower = max(0, index - 3), upper = min(pages.count - 1, index + 3)
         if includeVisible && fitted {
             let visible = stack.convert(scroll.bounds, from: scroll)
-            let indices = pages.indices.filter { pageFrames[pages[$0].id]?.intersects(visible) == true }
+            let indices = visibleIndices(in: visible)
             if let first = indices.first, let last = indices.last { lower = max(0, first - 2); upper = min(pages.count - 1, last + 2) }
         }
         if upper - lower + 1 > 16 { lower = max(lower, index - 8); upper = min(upper, lower + 15) }
+        let range = lower...upper
+        guard retainedRange != range else { return }
+        retainedRange = range
         let wanted = Set(pages[lower...upper].map(\.id))
         for id in Array(entries.keys) where !wanted.contains(id) {
-            guard let entry = entries[id], !entry.coordinator.usingTool else { continue }
+            guard let entry = entries[id] else { continue }
+            guard !entry.coordinator.usingTool else { retainedRange = nil; continue }
             // Failed saves retain the live coordinator and its authoritative drawing.
-            guard entry.coordinator.persist() else { continue }
+            entry.viewport.endEditing(true)
+            guard entry.coordinator.persist(force: false) else { retainedRange = nil; continue }
             entry.viewport.canvas.delegate = nil; entry.viewport.content.removeFromSuperview(); entries.removeValue(forKey: id)
         }
         for page in pages[lower...upper] where entries[page.id] == nil {
@@ -117,7 +131,8 @@ import PencilKit
             coordinator.onActivate = { [weak self] in self?.select(page.id, notify: true) }
             stack.addSubview(viewport.content)
             viewport.content.frame = pageFrames[page.id] ?? CGRect(origin: .zero, size: page.size)
-            viewport.outerZoom = scroll.zoomScale
+            let visible = stack.convert(scroll.bounds, from: scroll)
+            viewport.outerZoom = pageFrames[page.id]?.intersects(visible) == true ? scroll.zoomScale : 1
             coordinator.configure(currentSettings)
             entries[page.id] = Entry(page: page, viewport: viewport, coordinator: coordinator)
         }
@@ -128,19 +143,21 @@ import PencilKit
         guard bounds.width > 0, bounds.height > 0, bounds.size != lastSize, let first = pages.first else { return }
         lastSize = bounds.size
         changingLayout = true
-        scroll.zoomScale = max(0.1, min(4, min((bounds.width - 48) / first.size.width, (bounds.height - 80) / first.size.height)))
+        let initiallyFitted = fitted
+        if !fitted { scroll.zoomScale = max(0.1, min(4, min((bounds.width - 48) / first.size.width, (bounds.height - 80) / first.size.height))) }
         fitted = true; centerHorizontally(); applyRenderZoom()
-        if let selectedID { scrollToPage(selectedID) }
+        if !initiallyFitted, let selectedID { scrollToPage(selectedID) }
         changingLayout = false
         updateVisiblePage()
     }
     private func layoutPages() {
         let width = pages.map { $0.size.width }.max() ?? 0
         var y: CGFloat = 0
-        pageFrames = [:]
+        pageFrames = [:]; orderedFrames = []
         for page in pages {
             let frame = CGRect(x: (width - page.size.width) / 2, y: y, width: page.size.width, height: page.size.height)
             pageFrames[page.id] = frame
+            orderedFrames.append(frame)
             placeholders[page.id]?.frame = frame
             entries[page.id]?.viewport.content.frame = frame
             y += page.size.height + 20
@@ -153,7 +170,8 @@ import PencilKit
     }
     private func centerHorizontally() {
         let side = max(24, (bounds.width - scroll.contentSize.width) / 2)
-        scroll.contentInset = UIEdgeInsets(top: 60, left: side, bottom: 20, right: side)
+        let inset = UIEdgeInsets(top: 60, left: side, bottom: 20, right: side)
+        if scroll.contentInset != inset { scroll.contentInset = inset }
     }
     private func scrollToPage(_ id: String) {
         guard let frame = pageFrames[id] else { return }
@@ -166,27 +184,44 @@ import PencilKit
     private func updateVisiblePage() {
         guard !changingLayout, fitted else { return }
         let visible = stack.convert(scroll.bounds, from: scroll)
-        let best = pages.max { lhs, rhs in
-            let a = pageFrames[lhs.id]?.intersection(visible).height ?? 0
-            let b = pageFrames[rhs.id]?.intersection(visible).height ?? 0
-            return a < b
-        }
-        if let best, let index = pages.firstIndex(where: { $0.id == best.id }) {
+        let indices = visibleIndices(in: visible)
+        if let index = indices.max(by: { orderedFrames[$0].intersection(visible).height < orderedFrames[$1].intersection(visible).height }) {
+            let best = pages[index]
             changingLayout = true
             ensureEntries(around: index, includeVisible: true)
             let changed = best.id != selectedID
             select(best.id, notify: changed)
             changingLayout = false
+            if !scroll.isZooming { applyRenderZoom() }
         }
+    }
+    /// Frames are sorted vertically. Scrolling touches only the visible range, even in
+    /// notebooks with thousands of pages, rather than scanning every page each frame.
+    private func visibleIndices(in rect: CGRect) -> Range<Int> {
+        var low = 0, high = orderedFrames.count
+        while low < high {
+            let middle = (low + high) / 2
+            if orderedFrames[middle].maxY < rect.minY { low = middle + 1 } else { high = middle }
+        }
+        var end = low
+        while end < orderedFrames.count, orderedFrames[end].minY <= rect.maxY { end += 1 }
+        return low..<end
     }
     var livePageCount: Int { entries.count }
     var visiblePageIndex: Int? { pages.firstIndex(where: { $0.id == selectedID }) }
     func coordinator(for pageID: String) -> CanvasSurface.Coordinator? { entries[pageID]?.coordinator }
-    func flush() { for entry in entries.values { entry.viewport.inkInput.finishPendingStroke(); entry.coordinator.persist() } }
+    func flush() { for entry in entries.values { entry.viewport.endEditing(true); entry.viewport.inkInput.finishPendingStroke(); entry.coordinator.persist(force: false) } }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { stack }
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerHorizontally(); updateVisiblePage() }
-    /// After a pinch, every live page re-renders its ink at the new zoom so it stays sharp.
+    /// After a pinch, visible pages re-render at the new zoom; neighbors stay inexpensive.
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { applyRenderZoom() }
-    private func applyRenderZoom() { for entry in entries.values { entry.viewport.outerZoom = scroll.zoomScale } }
+    private func applyRenderZoom() {
+        let visible = stack.convert(scroll.bounds, from: scroll)
+        for entry in entries.values where !entry.coordinator.usingTool {
+            // Prefetched pages keep their ink at base resolution. Allocating an 8192px
+            // PencilKit surface for every offscreen neighbor wastes hundreds of MB at deep zoom.
+            entry.viewport.outerZoom = pageFrames[entry.page.id]?.intersects(visible) == true ? scroll.zoomScale : 1
+        }
+    }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { updateVisiblePage() }
 }

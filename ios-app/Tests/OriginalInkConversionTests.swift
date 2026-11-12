@@ -63,6 +63,19 @@ final class OriginalInkConversionTests: XCTestCase {
         XCTAssertEqual(box.minY, 120, accuracy: 0.01)
     }
 
+    func testOverlayOnlySkipsEditableStrokesButStillReportsCorruption() throws {
+        let raw = constantRaw(width: 2, start: .zero, control: CGPoint(x: 20, y: 10), end: CGPoint(x: 40, y: 20))
+        let data = stroke(type: 0, raw: raw, color: (0, 0, 0, 1))
+        let converted = try OriginalInk.read(data, convert: true)
+        let overlay = try OriginalInk.read(data, convert: true, overlayOnly: true)
+        XCTAssertFalse(converted.editable.isEmpty)
+        XCTAssertTrue(overlay.editable.isEmpty)
+        XCTAssertEqual(overlay.unsupported, converted.unsupported)
+        XCTAssertEqual(overlay.strokes.count, converted.strokes.count)
+        let broken = stroke(type: 0, raw: Data([1, 2, 3]), color: (0, 0, 0, 1))
+        XCTAssertEqual(try OriginalInk.read(broken, convert: true, overlayOnly: true).unsupported, 1)
+    }
+
     func testVariablePenKeepsRadiiAndHighlighterBecomesMarker() throws {
         // Start dot (x, y, r, extra), then one quadratic piece: control (x, y, r), end (x, y, r), three extras.
         var body = Data()

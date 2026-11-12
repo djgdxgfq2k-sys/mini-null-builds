@@ -98,23 +98,26 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
     var requestStudio: (() -> Void)?
     var reportError: (String) -> Void = { _ in }
     var didFinishErasing: (() -> Void)?
-    func undo() { target?.perform { [weak self] in self?.target?.canvas?.undoManager?.undo(); self?.refreshUndo() } }
-    func redo() { target?.perform { [weak self] in self?.target?.canvas?.undoManager?.redo(); self?.refreshUndo() } }
+    func undo() { guard let target else { return }; target.perform { [weak target, weak self] in target?.canvas?.undoManager?.undo(); self?.refreshUndo() } }
+    func redo() { guard let target else { return }; target.perform { [weak target, weak self] in target?.canvas?.undoManager?.redo(); self?.refreshUndo() } }
     func snapshot() -> PKDrawing { target?.drawing ?? PKDrawing() }
     func append(_ strokes: [PKStroke]) { target?.append(strokes) }
     func appendStreaming(_ strokes: [PKStroke], startsUndoGroup: Bool) { target?.appendStreaming(strokes, startsUndoGroup: startsUndoGroup) }
-    func flush() { target?.viewport?.inkInput.finishPendingStroke(); target?.persist() }
+    func flush() { target?.viewport?.endEditing(true); target?.viewport?.inkInput.finishPendingStroke(); target?.persist(force: false) }
     func addStickyNote() { target?.viewport?.addStickyNote() }
     func clear(_ kind: ClearKind) { target?.clear(kind) }
+    private var undoRefreshPending = false
     func refreshUndo() {
+        guard !undoRefreshPending else { return }; undoRefreshPending = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.undoRefreshPending = false
             let undo = self.target?.canvas?.undoManager?.canUndo ?? false, redo = self.target?.canvas?.undoManager?.canRedo ?? false
             if self.canUndo != undo { self.canUndo = undo }; if self.canRedo != redo { self.canRedo = redo }
         }
     }
     func afterInput(onFailure: (() -> Void)? = nil, _ action: @escaping () -> Void) {
-        if let target { target.perform { if target.persist() { action() } else { onFailure?() } } }
+        if let target { target.perform { target.viewport?.endEditing(true); if target.persist() { action() } else { onFailure?() } } }
         else { action() }
     }
 }
@@ -138,11 +141,18 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         context.coordinator.configure(settings)
     }
     static func dismantleUIView(_ view: PageViewport, coordinator: Coordinator) {
-        view.inkInput.finishPendingStroke(); coordinator.persist(); view.canvas.delegate = nil
+        view.endEditing(true); view.inkInput.finishPendingStroke(); coordinator.persist(force: false); view.canvas.delegate = nil
     }
 
     @MainActor final class Coordinator: NSObject, PKCanvasViewDelegate, UIScrollViewDelegate {
-        private(set) var drawing = PKDrawing()
+        private static let originalQueue: OperationQueue = {
+            let queue = OperationQueue(); queue.maxConcurrentOperationCount = 2; queue.qualityOfService = .userInitiated; return queue
+        }()
+        private(set) var drawing = PKDrawing() { didSet { needsSave = true; drawingGeneration += 1 } }
+        private var needsSave = false
+        private var drawingGeneration = 0
+        private var saveGeneration = 0
+        private let persistenceQueue = DispatchQueue(label: "studio.nullmini.page-save", qos: .utility)
         private(set) var usingTool = false
         private var queued: [() -> Void] = []
         private var inputGeneration = 0
@@ -150,6 +160,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         private var filteredEraseChanged = false
         private var cancelledInput = false
         private var currentSettings: ToolSettings?
+        private var pendingSettings: ToolSettings?
         private var writable = true
         private let page: NotebookPage
         private let directory: URL
@@ -162,6 +173,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             super.init()
             do { drawing = try DrawingDisk.load(directory, page.id) }
             catch { writable = false; DispatchQueue.main.async { commands.reportError("Gespeicherte Zeichnung konnte nicht geladen werden. Sie wird nicht überschrieben: \(error.localizedDescription)") } }
+            needsSave = false
         }
         func attach(_ view: PageViewport) {
             viewport = view; canvas = view.canvas
@@ -231,21 +243,24 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             // Imported Goodnotes strokes load off the main thread so scrolling never waits on unzipping.
             if page.sourceNotes != nil {
                 let source = page, folder = directory
-                DispatchQueue.global(qos: .userInitiated).async { [weak view, weak self] in
+                Self.originalQueue.addOperation { [weak view, weak self] in
+                    guard view != nil, self != nil else { return }
                     let result = Result { try NotebookArchive.originalInk(page: source, directory: folder) }
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak view, weak self] in
+                        guard let view, let self else { return }
                         switch result {
-                        case .success(let ink): view?.original.ink = ink
-                        case .failure(let error): self?.commands?.reportError("Originalebene nicht lesbar: \(error.localizedDescription)")
+                        case .success(let ink): view.original.ink = ink
+                        case .failure(let error): self.commands?.reportError("Originalebene nicht lesbar: \(error.localizedDescription)")
                         }
                     }
                 }
             }
         }
         func configure(_ settings: ToolSettings) {
-            guard settings != currentSettings, let canvas else { return }
+            guard let canvas else { return }
             // Do not swap a live Pencil tool during a stroke.
-            if usingTool { queued.append { [weak self] in self?.configure(settings) }; return }
+            if usingTool { pendingSettings = settings; return }
+            guard settings != currentSettings else { return }
             currentSettings = settings
             applyTool()
             canvas.drawingPolicy = settings.finger || !settings.pencilConnected ? .anyInput : .pencilOnly
@@ -375,19 +390,22 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             if !usingTool, pendingRestyle != nil { DispatchQueue.main.async { [weak self] in self?.restyleIfReady() } }
             // While a tool is in use PencilKit reports every small change; writing the whole page to disk
             // each time made erasing stutter. Save once the tool lifts, or shortly after a burst of changes.
-            if filteredEraseBefore == nil { if usingTool { schedulePersist() } else { persist() } }
+            if filteredEraseBefore == nil, !usingTool { schedulePersist() }
             commands?.refreshUndo()
         }
         private var pendingPersist: DispatchWorkItem?
         private func schedulePersist() {
             pendingPersist?.cancel()
-            let task = DispatchWorkItem { [weak self] in self?.persist() }
+            let task = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.usingTool { self.schedulePersist() } else { self.autosave() }
+            }
             pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             InkDiagnostics.log("end tool=\(currentSettings?.tool.rawValue ?? "-") strokes=\(canvasView.drawing.strokes.count) start=\(toolStart?.strokes.count ?? -1)")
             if let start = toolStart { toolStart = nil; pendingRestyle = (start, Date()) }
-            drawing = canvasView.drawing; persist()
+            drawing = canvasView.drawing; schedulePersist()
             finishToolUse()
         }
         func canvasViewDidFinishRendering(_ canvasView: PKCanvasView) { viewport?.inkInput.committedCanvasDidRender() }
@@ -399,17 +417,39 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 self.usingTool = false
                 self.restyleIfReady()
                 self.viewport?.showLiveInk(false)
+                if let settings = self.pendingSettings { self.pendingSettings = nil; self.configure(settings) }
                 let pending = self.queued; self.queued.removeAll()
                 for action in pending { action() }
                 if erasing { self.commands?.didFinishErasing?() }
                 self.commands?.refreshUndo()
             }
         }
-        @discardableResult func persist() -> Bool {
+        @discardableResult func persist(force: Bool = true) -> Bool {
             pendingPersist?.cancel(); pendingPersist = nil
             guard writable else { return true }
-            do { try DrawingDisk.save(drawing, directory: directory, page: page.id); return true }
-            catch { commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)"); return false }
+            guard force || needsSave else { return true }
+            saveGeneration += 1
+            let snapshot = drawing, directory = directory, pageID = page.id
+            do { try persistenceQueue.sync { try DrawingDisk.save(snapshot, directory: directory, page: pageID) }; needsSave = false; return true }
+            catch { needsSave = true; commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)"); return false }
+        }
+        private func autosave() {
+            pendingPersist = nil
+            guard writable, needsSave else { return }
+            saveGeneration += 1
+            let save = saveGeneration, revision = drawingGeneration
+            let snapshot = drawing, directory = directory, pageID = page.id
+            persistenceQueue.async { [weak self] in
+                let result = Result { try DrawingDisk.save(snapshot, directory: directory, page: pageID) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.saveGeneration == save else { return }
+                    switch result {
+                    case .success: if self.drawingGeneration == revision { self.needsSave = false }
+                    case .failure(let error):
+                        self.commands?.reportError("Striche sind noch im Speicher, konnten aber nicht gesichert werden: \(error.localizedDescription)")
+                    }
+                }
+            }
         }
         func perform(_ action: @escaping () -> Void) { if usingTool { queued.append(action) } else { action() } }
         func clear(_ kind: ClearKind) {
@@ -489,7 +529,12 @@ final class SharpDetailView: UIView {
 }
 
 final class PaperView: UIView {
-    var page: NotebookPage { didSet { let page = page; detail.locked { tilePage = page }; detail.setNeedsDisplay() } }
+    var page: NotebookPage {
+        didSet {
+            guard page.paper != oldValue.paper || page.paperColor != oldValue.paperColor || page.nativeSize != oldValue.nativeSize || page.pdf != oldValue.pdf || page.pdfPage != oldValue.pdfPage else { return }
+            let page = page; detail.locked { tilePage = page }; setNeedsDisplay()
+        }
+    }
     private var tilePage: NotebookPage
     let pdf: PDFDocument?
     private lazy var detail = SharpDetailView { [weak self] c, bounds in
@@ -520,8 +565,10 @@ final class PaperView: UIView {
     }
     private func render(_ c: CGContext, bounds: CGRect, page: NotebookPage) {
         let bucket = Int(hypot(c.ctm.a, c.ctm.b).rounded())
-        if InkDetailView.loggedScales.insert(1000 + bucket).inserted { InkDiagnostics.log("paper tile scale=\(hypot(c.ctm.a, c.ctm.b))") }
+        InkDiagnostics.logOnce(scale: 1000 + bucket, "paper tile scale=\(hypot(c.ctm.a, c.ctm.b))")
         c.setFillColor(UIColor(hex: page.paperColor ?? "#FFFFFF").cgColor); c.fill(bounds)
+        Self.pdfLock.lock()
+        defer { Self.pdfLock.unlock() }
         if let p = pdf?.page(at: page.pdfPage) {
             c.saveGState(); c.translateBy(x: 0, y: bounds.height); c.scaleBy(x: 1, y: -1)
             let box = p.bounds(for: .cropBox)
@@ -529,7 +576,7 @@ final class PaperView: UIView {
             c.scaleBy(x: bounds.width / box.width, y: bounds.height / box.height)
             // Pages share PDF documents and tiles render on several threads; PDFKit draws one at a time.
             c.translateBy(x: -box.minX, y: -box.minY)
-            Self.pdfLock.lock(); p.draw(with: .cropBox, to: c); Self.pdfLock.unlock()
+            p.draw(with: .cropBox, to: c)
             c.restoreGState()
         } else { Self.paint(c, bounds: bounds, paper: page.paper) }
     }
@@ -645,7 +692,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     }
     required init?(coder: NSCoder) { nil }
     func updatePage(_ page: NotebookPage) {
-        guard page != pageMetadata else { return }; pageMetadata = page
+        let previous = pageMetadata; pageMetadata = page
+        guard previous?.nativeSize != page.nativeSize || previous?.quarterTurns != page.quarterTurns || previous?.paper != page.paper || previous?.paperColor != page.paperColor || previous?.pdf != page.pdf || previous?.pdfPage != page.pdfPage else { return }
         content.bounds.size = page.size
         document.transform = .identity; document.bounds = CGRect(origin: .zero, size: page.nativeSize)
         document.center = CGPoint(x: content.bounds.midX, y: content.bounds.midY)
@@ -653,7 +701,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
         original.frame = document.bounds; inkInput.frame = document.bounds; interaction.frame = document.bounds; lasso.frame = document.bounds
         inkDetail.frame = document.bounds
         layoutCanvas()
-        if let paper = document.subviews.first as? PaperView { paper.page = page; paper.frame = document.bounds; paper.setNeedsDisplay() }
+        if let paper = document.subviews.first as? PaperView { paper.page = page; paper.frame = document.bounds }
+        content.layer.shadowPath = UIBezierPath(rect: content.bounds).cgPath
         scroll.contentSize = CGSize(width: page.size.width * scroll.zoomScale, height: page.size.height * scroll.zoomScale)
     }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { scrollView === scroll ? content : nil }
@@ -662,7 +711,7 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     /// Deepest zoom, relative to the page's own size; pages also render sharp up to here.
     static let maximumZoom: CGFloat = 10
     /// Zoom of the notebook scroll view that holds this page (1 when the page zooms by itself).
-    var outerZoom: CGFloat = 1 { didSet { updateRenderScale() } }
+    var outerZoom: CGFloat = 1 { didSet { if outerZoom != oldValue { updateRenderScale() } } }
     /// Scale PencilKit renders the ink at, matching the on-screen zoom so strokes stay pixel-sharp.
     private(set) var renderScale: CGFloat = 1
     func updateRenderScale() {
@@ -712,7 +761,8 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     }
     func centerPage() {
         let size = scroll.contentSize
-        scroll.contentInset = UIEdgeInsets(top: max(64,(bounds.height-size.height)/2), left: max(24,(bounds.width-size.width)/2), bottom: 32, right: max(24,(bounds.width-size.width)/2))
+        let inset = UIEdgeInsets(top: max(64,(bounds.height-size.height)/2), left: max(24,(bounds.width-size.width)/2), bottom: 32, right: max(24,(bounds.width-size.width)/2))
+        if scroll.contentInset != inset { scroll.contentInset = inset }
     }
     func setTool(_ settings: ToolSettings, writable: Bool) {
         let tool = settings.tool; self.tool = tool; shape = settings.geometricShape
@@ -821,9 +871,14 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     func textViewDidChange(_ textView: UITextView) {
         guard textWritable else { return }
         if (textView as? PageTextView)?.noteColor == nil { textView.sizeToFit() }
-        saveTexts()
+        pendingTextSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveTexts() }
+        pendingTextSave = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
+    private var pendingTextSave: DispatchWorkItem?
+    func textViewDidEndEditing(_ textView: UITextView) { if textWritable { saveTexts() } }
     private func saveTexts() {
+        pendingTextSave?.cancel(); pendingTextSave = nil
         let saved = boxes.map { TextBox(text:$0.text,x:$0.frame.minX,y:$0.frame.minY,width:$0.frame.width,height:$0.frame.height,color:$0.noteColor,fontSize:$0.fontSize) }
         do { try JSONEncoder().encode(saved).write(to:textURL,options:.atomic) }
         catch { onError?("Text konnte nicht gespeichert werden: \(error.localizedDescription)") }
@@ -888,7 +943,6 @@ final class InkDetailView: UIView {
     private let lock = NSLock()
     private var drawing = PKDrawing()
     private var dirty = false
-    nonisolated(unsafe) static var loggedScales = Set<Int>()
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear; isOpaque = false; isUserInteractionEnabled = false; overrideUserInterfaceStyle = .light
@@ -906,16 +960,27 @@ final class InkDetailView: UIView {
         guard !ink.strokes.isEmpty, ink.bounds.intersects(rect) else { return }
         let scale = max(1, min(40, hypot(c.ctm.a, c.ctm.b)))
         let bucket = Int(scale.rounded())
-        if Self.loggedScales.insert(bucket).inserted { InkDiagnostics.log("ink tile scale=\(scale) rect=\(InkDiagnostics.box(rect)) screen=\(UIScreen.main.scale)") }
+        InkDiagnostics.logOnce(scale: bucket, "ink tile scale=\(scale) rect=\(InkDiagnostics.box(rect))")
         ink.paperImage(from: rect, scale: scale).draw(in: rect)
     }
 }
 
 /// Temporary on-device log (Documents/ink-diagnostics.log) to find where strokes get lost.
 enum InkDiagnostics {
+    private static let queue = DispatchQueue(label: "studio.nullmini.ink-diagnostics", qos: .utility)
+    private static let scaleLock = NSLock()
+    private static var loggedScales = Set<Int>()
+    static func logOnce(scale: Int, _ line: String) {
+        scaleLock.lock(); let inserted = loggedScales.insert(scale).inserted; scaleLock.unlock()
+        if inserted { log(line) }
+    }
     private static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ink-diagnostics.log")
     static func log(_ line: String) {
-        let text = ISO8601DateFormatter().string(from: Date()) + " " + line + String(UnicodeScalar(10))
+        let date = Date()
+        queue.async { write(line, at: date) }
+    }
+    private static func write(_ line: String, at date: Date) {
+        let text = ISO8601DateFormatter().string(from: date) + " " + line + String(UnicodeScalar(10))
         guard let data = text.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }

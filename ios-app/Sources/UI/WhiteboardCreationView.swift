@@ -126,11 +126,12 @@ private struct WhiteboardBackgroundPreview: View {
 @MainActor struct WhiteboardArtwork: View {
     let page: NotebookPage
     let directory: URL
+    var revision = 0
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottom) {
                 if let catalog = OriginalAssets.library { Image("canvases/back/canvas_back", bundle: catalog).resizable().scaledToFit() }
-                NotebookPreview(page: page, directory: directory).padding(.horizontal, geometry.size.width * 0.025).padding(.top, geometry.size.height * 0.025).padding(.bottom, geometry.size.height * 0.06)
+                NotebookPreview(page: page, directory: directory, revision: revision).padding(.horizontal, geometry.size.width * 0.025).padding(.top, geometry.size.height * 0.025).padding(.bottom, geometry.size.height * 0.06)
                 if let catalog = OriginalAssets.library { Image("canvases/front/canvas_front", bundle: catalog).resizable().scaledToFit().frame(width: geometry.size.width * 0.77).offset(y: 4) }
             }
         }

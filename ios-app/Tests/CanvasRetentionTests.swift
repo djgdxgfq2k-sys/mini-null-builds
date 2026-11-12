@@ -22,6 +22,8 @@ import UIKit
             XCTAssertEqual(viewport.canvas.drawing.strokes.count,i+1)
             XCTAssertEqual(coordinator.drawing.strokes.count,i+1)
         }
+        // Native drawing callbacks coalesce autosaves; explicitly checkpoint before disk reload.
+        XCTAssertTrue(coordinator.persist())
         let reloaded = try DrawingDisk.load(directory,page.id)
         XCTAssertEqual(reloaded.strokes.count,100)
         for i in 0..<100 { XCTAssertEqual(reloaded.strokes[i].path.first?.location.x,10) }

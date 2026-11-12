@@ -6,7 +6,13 @@ import PencilKit
 /// sometimes the original archive, so it never runs on the main thread: previews are drawn on a small
 /// background queue and kept in memory and on disk until the page or its ink changes.
 enum NotebookThumbnail {
-    private static let memory: NSCache<NSString, UIImage> = { let c = NSCache<NSString, UIImage>(); c.countLimit = 400; return c }()
+    private final class Cancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    }
+    private static let memory: NSCache<NSString, UIImage> = { let c = NSCache<NSString, UIImage>(); c.countLimit = 400; c.totalCostLimit = 64 * 1024 * 1024; return c }()
     private static let queue: OperationQueue = { let q = OperationQueue(); q.maxConcurrentOperationCount = 2; q.qualityOfService = .userInitiated; return q }()
     private static let pdfLock = NSLock()
     private static let folder: URL = {
@@ -19,8 +25,9 @@ enum NotebookThumbnail {
     static func key(page: NotebookPage, directory: URL, width: CGFloat) -> String {
         var hash: UInt64 = 0xcbf29ce484222325
         func mix<S: Sequence>(_ bytes: S) where S.Element == UInt8 { for b in bytes { hash = (hash ^ UInt64(b)) &* 0x100000001b3 } }
-        if let meta = try? JSONEncoder().encode(page) { mix(meta) }
-        mix(directory.lastPathComponent.utf8)
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        if let meta = try? encoder.encode(page) { mix(meta) }
+        mix(directory.standardizedFileURL.path.utf8)
         for name in [page.id + ".drawing", page.id + ".texts.json"] {
             if let date = try? directory.appendingPathComponent(name).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate { mix(String(date.timeIntervalSince1970).utf8) }
         }
@@ -30,22 +37,26 @@ enum NotebookThumbnail {
     static func cached(_ key: String) -> UIImage? { memory.object(forKey: key as NSString) }
 
     static func image(page: NotebookPage, directory: URL, width: CGFloat = 160) async -> UIImage? {
-        let key = key(page: page, directory: directory, width: width)
-        if let hit = memory.object(forKey: key as NSString) { return hit }
-        return await withCheckedContinuation { continuation in
-            queue.addOperation {
-                let file = folder.appendingPathComponent(key + ".jpg")
-                if let data = try? Data(contentsOf: file), let stored = UIImage(data: data, scale: 2) {
-                    memory.setObject(stored, forKey: key as NSString); continuation.resume(returning: stored); return
+        let cancellation = Cancellation()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
+                queue.addOperation {
+                    guard !cancellation.isCancelled else { continuation.resume(returning: nil); return }
+                    let key = key(page: page, directory: directory, width: width)
+                    if let hit = memory.object(forKey: key as NSString) { continuation.resume(returning: hit); return }
+                    let file = folder.appendingPathComponent(key + ".jpg")
+                    if let data = try? Data(contentsOf: file), let stored = UIImage(data: data, scale: 2) {
+                        memory.setObject(stored, forKey: key as NSString, cost: Int(stored.size.width * stored.size.height * stored.scale * stored.scale * 4)); continuation.resume(returning: stored); return
+                    }
+                    let image = try? render(page: page, directory: directory, width: width)
+                    if let image {
+                        memory.setObject(image, forKey: key as NSString, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4))
+                        if let jpeg = image.jpegData(compressionQuality: 0.85) { try? jpeg.write(to: file, options: .atomic) }
+                    }
+                    continuation.resume(returning: image)
                 }
-                let image = try? render(page: page, directory: directory, width: width)
-                if let image {
-                    memory.setObject(image, forKey: key as NSString)
-                    if let jpeg = image.jpegData(compressionQuality: 0.85) { try? jpeg.write(to: file, options: .atomic) }
-                }
-                continuation.resume(returning: image)
             }
-        }
+        }, onCancel: { cancellation.cancel() })
     }
 
     static func render(page: NotebookPage, directory: URL, width: CGFloat = 160) throws -> UIImage {
@@ -85,6 +96,8 @@ enum NotebookThumbnail {
     let directory: URL
     /// Library cards show the notebook's cover when it has one.
     var cover = false
+    var revision = 0
+    private struct Request: Equatable { let page: NotebookPage; let directory: URL; let cover: Bool; let revision: Int }
     @State private var image: UIImage?
     var body: some View {
         Group {
@@ -92,9 +105,8 @@ enum NotebookThumbnail {
             else { Rectangle().fill(.white).aspectRatio(page.size.width / page.size.height, contentMode: .fit) }
         }.clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay { RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.5), lineWidth: 1) }
-            .task(id: page) {
-                if cover, NotebookCover.exists(directory), let art = await NotebookCover.image(directory) { image = art; return }
-                if image == nil, let hit = NotebookThumbnail.cached(NotebookThumbnail.key(page: page, directory: directory, width: 160)) { image = hit; return }
+            .task(id: Request(page: page, directory: directory, cover: cover, revision: revision)) {
+                if cover, let art = await NotebookCover.image(directory) { if !Task.isCancelled { image = art }; return }
                 let rendered = await NotebookThumbnail.image(page: page, directory: directory)
                 if !Task.isCancelled { withAnimation(.easeOut(duration: 0.15)) { image = rendered } }
             }

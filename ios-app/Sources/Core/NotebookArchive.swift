@@ -5,6 +5,14 @@ import PencilKit
 import UIKit
 
 enum NotebookArchive {
+    private final class InkCacheEntry {
+        let ink: OriginalInk
+        init(_ ink: OriginalInk) { self.ink = ink }
+    }
+    private static let inkCache: NSCache<NSString, InkCacheEntry> = {
+        let cache = NSCache<NSString, InkCacheEntry>(); cache.countLimit = 24; cache.totalCostLimit = 32 * 1024 * 1024; return cache
+    }()
+    private static let inkLock = NSLock()
     static let maxEntry = 128 * 1024 * 1024
     static let maxArchive = 512 * 1024 * 1024
     static func entries(_ url: URL) throws -> [String: Data] {
@@ -91,7 +99,7 @@ enum NotebookArchive {
                 guard schema > 0 else { throw NotebookError.invalid("Archiv-Schema fehlt.") }
                 _ = notesIndex
                 // Each background PDF is stored once and shared by every page that shows one of its pages.
-                var written: [String: (name: String, pages: Int)] = [:]
+                var written: [String: (name: String, document: PDFDocument?)] = [:]
                 var unsupported = 0
                 for layout in try GoodnotesLayout.pages(files) {
                     var page = NotebookPage(sourceNotes: layout.notesPath, paper: "blank")
@@ -100,11 +108,11 @@ enum NotebookArchive {
                         if written[background] == nil {
                             let name = UUID().uuidString + ".pdf"
                             try pdfData.write(to: directory.appendingPathComponent(name), options: .atomic)
-                            written[background] = (name, PDFDocument(data: pdfData)?.pageCount ?? 0)
+                            written[background] = (name, PDFDocument(data: pdfData))
                         }
-                        if let pdf = written[background], pdf.pages > 0 {
-                            page.pdf = pdf.name; page.pdfPage = min(layout.backgroundPage, pdf.pages - 1)
-                            if layout.size == nil, let box = PDFDocument(data: pdfData)?.page(at: page.pdfPage)?.bounds(for: .cropBox).size, box.width > 0, box.height > 0 {
+                        if let pdf = written[background], let document = pdf.document, document.pageCount > 0 {
+                            page.pdf = pdf.name; page.pdfPage = max(0, min(layout.backgroundPage, document.pageCount - 1))
+                            if layout.size == nil, let box = document.page(at: page.pdfPage)?.bounds(for: .cropBox).size, box.width > 0, box.height > 0 {
                                 page.width = box.width; page.height = box.height
                             }
                         }
@@ -138,10 +146,19 @@ enum NotebookArchive {
     }
     static func originalInk(page: NotebookPage, directory: URL) throws -> OriginalInk {
         guard let path = page.sourceNotes else { return OriginalInk() }
+        let archive = directory.appendingPathComponent("original.goodnotes")
+        let stamp = try archive.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let key = "\(archive.standardizedFileURL.path)|\(stamp.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp.fileSize ?? 0)|\(path)|\(page.inkConverted == true)" as NSString
+        // An immutable source layer is shared by canvas, thumbnails and export. Serializing
+        // cache misses also prevents prefetch and a preview from decoding the same archive twice.
+        inkLock.lock(); defer { inkLock.unlock() }
+        if let cached = inkCache.object(forKey: key) { return cached.ink }
         // Converted pages keep only what could not become PencilKit strokes on the original layer.
-        var ink = try OriginalInk.read(entry(path, in: directory.appendingPathComponent("original.goodnotes")), convert: page.inkConverted == true)
+        var ink = try OriginalInk.read(entry(path, in: archive), convert: page.inkConverted == true, overlayOnly: true)
         ink.editable = []; ink.texts = []
         ink.loadImages(from: directory)
+        let imageCost = ink.images.reduce(0) { $0 + (($1.image?.cgImage).map { $0.bytesPerRow * $0.height } ?? 0) }
+        inkCache.setObject(InkCacheEntry(ink), forKey: key, cost: max(1024, imageCost + ink.strokes.count * 1024))
         return ink
     }
     /// One member of an archive, with the same safety checks as `entries`, without unpacking the rest.

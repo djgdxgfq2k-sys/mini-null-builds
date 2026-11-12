@@ -18,6 +18,7 @@ import PDFKit
     @State private var selectedTab = 0
     @State private var searchScope = 0
     @State private var contextPage: String?
+    @State private var searchTask: Task<Void, Never>?
     var body: some View {
         VStack(spacing: 16) {
             ZStack {
@@ -85,6 +86,8 @@ import PDFKit
             }
         }.padding(.horizontal, 17).foregroundStyle(.white).frame(maxHeight: .infinity).background(mode == .search ? Color(hex: "#140E0E") : Theme.pill)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 0.5) }
+            .onChange(of: query) { _, _ in searchTask?.cancel(); results = [] }
+            .onDisappear { searchTask?.cancel() }
     }
     private func pageThumbnail(_ page: NotebookPage, active: Bool) -> some View {
         let scale = min(135 / page.size.width, 175 / page.size.height)
@@ -93,11 +96,34 @@ import PDFKit
             .overlay { Rectangle().stroke(active ? Theme.accent : .clear, lineWidth: 2) }.frame(width: 135, height: 175, alignment: .bottom)
     }
     private func search() {
+        searchTask?.cancel()
         results = []
         guard !query.isEmpty else { return }
-        for (index, page) in item.pages.enumerated() {
-            if searchScope == 1 { if let title = page.outlineTitle, title.localizedCaseInsensitiveContains(query) { results.append((index, title)) }; continue }
-            if let name = page.pdf, let document = PDFDocument(url: directory.appendingPathComponent(name)), let text = document.page(at: page.pdfPage)?.string, text.localizedCaseInsensitiveContains(query) { results.append((index, text)) }
+        let pages = item.pages, directory = directory, query = query, outlines = searchScope == 1
+        searchTask = Task {
+            let found = await NotebookTextSearch.search(pages: pages, directory: directory, query: query, outlines: outlines)
+            if !Task.isCancelled { results = found }
         }
+    }
+}
+
+/// PDFKit instances belong to this worker, never to the canvas's tile-rendering threads.
+enum NotebookTextSearch {
+    static func search(pages: [NotebookPage], directory: URL, query: String, outlines: Bool = false) async -> [(Int, String)] {
+        let work = Task.detached(priority: .userInitiated) { () -> [(Int, String)] in
+            var documents: [String: PDFDocument] = [:], results: [(Int, String)] = []
+            for (index, page) in pages.enumerated() {
+                if Task.isCancelled { break }
+                let text: String?
+                if outlines { text = page.outlineTitle }
+                else if let name = page.pdf {
+                    if documents[name] == nil { documents[name] = PDFDocument(url: directory.appendingPathComponent(name)) }
+                    text = documents[name]?.page(at: page.pdfPage)?.string
+                } else { text = nil }
+                if let text, text.localizedCaseInsensitiveContains(query) { results.append((index, text)) }
+            }
+            return results
+        }
+        return await withTaskCancellationHandler(operation: { await work.value }, onCancel: { work.cancel() })
     }
 }

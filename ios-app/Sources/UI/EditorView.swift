@@ -30,6 +30,8 @@ import PDFKit
     @State private var shareURL: URL?
     @State private var query = ""
     @State private var searchResults: [(Int,String)] = []
+    @State private var searchTask: Task<Void, Never>?
+    @State private var initializedPage = false
     @State private var renaming = false
     @State private var newTitle = ""
     @State private var actionPageID: String?
@@ -42,6 +44,10 @@ import PDFKit
     @State private var pencilHistory = PencilToolHistory()
     @State private var pencilPalette: PencilPalette?
     @State private var pencilAnchor: CGPoint?
+    init(bookID: String, separateWindow: Bool = false, initialPageID: String? = nil) {
+        self.bookID = bookID; self.separateWindow = separateWindow; self.initialPageID = initialPageID
+        _pageIndex = State(initialValue: max(0, UserDefaults.standard.integer(forKey: "nullmini.lastPage." + bookID)))
+    }
     private var item: LibraryItem? { store.item(bookID) }
     private var page: NotebookPage? { guard let pages = item?.pages, pages.indices.contains(pageIndex) else { return nil }; return pages[pageIndex] }
     var body: some View {
@@ -79,7 +85,11 @@ import PDFKit
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: studyTimer.visible)
         .fullScreenCover(isPresented: $studying) { if let item { FlashcardStudyView(item: item, directory: store.directory(bookID)) } }
         .onAppear {
-            if let initialPageID, let index = item?.pages.firstIndex(where: { $0.id == initialPageID }) { pageIndex = index }
+            if !initializedPage {
+                initializedPage = true
+                if let initialPageID, let index = item?.pages.firstIndex(where: { $0.id == initialPageID }) { pageIndex = index }
+                else { pageIndex = min(pageIndex, max(0, (item?.pages.count ?? 1) - 1)) }
+            }
             if store.openRecorder { store.openRecorder = false; DispatchQueue.main.async { panel = .audio } }
             // Errors can arrive while SwiftUI tears the editor down; publish them on the next run loop turn.
             commands.reportError = { message in DispatchQueue.main.async { store.error = message } }
@@ -89,11 +99,14 @@ import PDFKit
         .onChange(of: settings.tool) { old, new in pencilHistory.record(from: old, to: new) }
         .onChange(of: settings.readOnly) { _, value in if value { pencilPalette = nil } }
         .onChange(of: settings) { _, value in ToolSettingsStore.save(value) }
-        .onDisappear { commands.flush() }
+        .onChange(of: pageIndex) { _, index in UserDefaults.standard.set(index, forKey: "nullmini.lastPage." + bookID) }
+        .onChange(of: item?.pages.count) { _, count in pageIndex = min(pageIndex, max(0, (count ?? 1) - 1)) }
+        .onChange(of: query) { _, _ in searchTask?.cancel(); searchResults = [] }
+        .onDisappear { searchTask?.cancel(); commands.flush() }
         .sheet(item: $panel) { p in sheet(p) }
         .sheet(isPresented: $customizingToolbar) { ToolbarCustomizationView(settings: $settings) }
         .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }
-        .alert("Notizbuch umbenennen", isPresented: $renaming) { TextField("Name", text: $newTitle); Button("Abbrechen", role: .cancel) {}; Button("Sichern") { if var item, !newTitle.trimmingCharacters(in: .whitespaces).isEmpty { item.title = newTitle; store.update(item) } } }
+        .alert("Notizbuch umbenennen", isPresented: $renaming) { TextField("Name", text: $newTitle); Button("Abbrechen", role: .cancel) {}; Button("Sichern") { if var item, !newTitle.trimmingCharacters(in: .whitespaces).isEmpty { item.title = newTitle; store.update(item, deferred: true) } } }
         .alert("Zur Gliederung hinzufügen", isPresented: $outlineEditing) {
             TextField("Name", text: $outlineName)
             Button("Abbrechen", role: .cancel) {}
@@ -416,7 +429,7 @@ import PDFKit
     }
     private func changeTemplate(_ paper: String) {
         guard var item, item.pages.indices.contains(pageIndex), item.pages[pageIndex].pdf == nil else { return }
-        item.pages[pageIndex].paper = paper; store.update(item)
+        item.pages[pageIndex].paper = paper; store.update(item, deferred: true)
     }
     private func printDocument() {
         commands.flush(); guard let item else { return }
@@ -427,7 +440,7 @@ import PDFKit
             controller.printingItem = url; controller.present(animated: true)
         } catch { store.error = error.localizedDescription }
     }
-    private func bookmark() { guard var item, item.pages.indices.contains(pageIndex) else { return }; item.pages[pageIndex].bookmarked.toggle(); store.update(item) }
+    private func bookmark() { guard var item, item.pages.indices.contains(pageIndex) else { return }; item.pages[pageIndex].bookmarked.toggle(); store.update(item, deferred: true) }
     private func export(_ kind: ExportKind, currentPage: Bool = false) {
         commands.flush(); guard var item else { return }
         if currentPage, let page { item.pages = [page] }
@@ -467,9 +480,12 @@ import PDFKit
         }.presentationDetents([.large])
     }
     private func searchPDF() {
+        searchTask?.cancel()
         searchResults = []; guard let item, !query.isEmpty else { return }
-        for (i,p) in item.pages.enumerated() {
-            if let name = p.pdf, let doc = PDFDocument(url:store.directory(bookID).appendingPathComponent(name)), let text = doc.page(at:p.pdfPage)?.string, text.localizedCaseInsensitiveContains(query) { searchResults.append((i,text)) }
+        let pages = item.pages, directory = store.directory(bookID), query = query
+        searchTask = Task {
+            let found = await NotebookTextSearch.search(pages: pages, directory: directory, query: query)
+            if !Task.isCancelled { searchResults = found }
         }
     }
 }

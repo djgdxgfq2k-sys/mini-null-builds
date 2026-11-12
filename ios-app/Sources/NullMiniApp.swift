@@ -3,6 +3,7 @@ import UIKit
 
 @main @MainActor struct NullMiniApp: App {
     @StateObject private var store = LibraryStore()
+    @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(store).preferredColorScheme(.dark).tint(Theme.accent)
@@ -15,6 +16,9 @@ import UIKit
                 .onAppear {
                     if ProcessInfo.processInfo.arguments.contains("--notebook"), let item = store.items.first(where: { !$0.folder }) { store.open(item.id) }
                     ScreenshotRun.startIfRequested()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .background { do { try store.save() } catch { store.error = error.localizedDescription } }
                 }
         }
         // A second window shows one notebook on its own, e.g. next to another one in Split View.

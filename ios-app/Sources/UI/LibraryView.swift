@@ -39,6 +39,9 @@ import PhotosUI
     @State private var renaming = false
     /// Direction of the folder push: into a folder slides in from the right, back slides in from the left.
     @State private var forward = true
+    @State private var thumbnailRevision = 0
+    @State private var librarySize = CGSize.zero
+    @State private var navigationGeneration = 0
     init(showFolderCreation: Bool = false, sidebarShown: Bool = true, menu: LibraryMenuKind? = nil, folderID: String? = nil) {
         _creatingFolder = State(initialValue: showFolderCreation)
         _sidebarShown = State(initialValue: sidebarShown)
@@ -63,7 +66,7 @@ import PhotosUI
             libraryContent.blur(radius: creatingFolder ? 30 : 0).allowsHitTesting(!creatingFolder).accessibilityHidden(creatingFolder)
             if creatingFolder {
                 FolderCreationView(onDismiss: { creatingFolder = false }) { name, color, symbol in
-                    if var item = store.add(title: name, parent: folder, folder: true, color: color) { item.symbol = symbol; store.update(item) }
+                    if var item = store.add(title: name, parent: folder, folder: true, color: color) { item.symbol = symbol; store.update(item, deferred: true) }
                 }
             }
         }
@@ -87,7 +90,7 @@ import PhotosUI
                 if var item = store.add(title: name, parent: folder, color: "#FFFFFF") {
                     item.pages[0].paper = paper; item.pages[0].paperColor = paperColor; item.pages[0].width = Double(size.width); item.pages[0].height = Double(size.height)
                     if let cover, let data = NotebookCover.make(color: cover) { try? data.write(to: NotebookCover.url(store.directory(item.id)), options: .atomic) }
-                    store.update(item); store.open(item.id)
+                    store.update(item, deferred: true); store.open(item.id)
                 }
             }
         }
@@ -101,7 +104,7 @@ import PhotosUI
                 } else if var item = store.add(title: name, parent: folder, color: color) {
                     item.kind = .whiteboard; item.pages[0].width = 1122; item.pages[0].height = 842
                     item.pages[0].paper = paper; item.pages[0].paperColor = color
-                    store.update(item); store.open(item.id)
+                    store.update(item, deferred: true); store.open(item.id)
                 }
             }
         }
@@ -123,9 +126,10 @@ import PhotosUI
         }
         .fullScreenCover(isPresented: $takingPhoto) { DocumentCamera { images in takingPhoto = false; Task { await importImages(images, title: "Foto") } }.ignoresSafeArea() }
         .sheet(item: $editing) { action in editSheet(action) }
+        .onChange(of: store.active) { _, active in if active == nil { thumbnailRevision += 1 } }
         .alert("Umbenennen", isPresented: $renaming) {
             TextField("Name", text: $title); Button("Abbrechen", role: .cancel) {}
-            Button("Sichern") { if var item = editItem, !title.trimmingCharacters(in: .whitespaces).isEmpty { item.title = title.trimmingCharacters(in: .whitespaces); store.update(item) } }
+            Button("Sichern") { if var item = editItem, !title.trimmingCharacters(in: .whitespaces).isEmpty { item.title = title.trimmingCharacters(in: .whitespaces); store.update(item, deferred: true) } }
         }
     }
     private func menuOverlay(_ anchors: [LibraryMenuKind: Anchor<CGRect>]) -> some View {
@@ -151,7 +155,8 @@ import PhotosUI
         }
     }
     private var libraryContent: some View {
-        GeometryReader { geo in
+        let visible = self.visible
+        return GeometryReader { geo in
             HStack(spacing: 0) {
                 if sidebarShown && geo.size.width > 800 {
                     sidebar.frame(width: ReferenceLayout.sidebar).background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 26))
@@ -186,7 +191,8 @@ import PhotosUI
                     }.clipped()
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.foregroundStyle(.white).tint(Theme.accent).buttonStyle(.solidPlain)
-        }.background(Theme.library.ignoresSafeArea())
+                .onChange(of: geo.size, initial: true) { _, size in librarySize = size }
+        }.coordinateSpace(name: "library").background(Theme.library.ignoresSafeArea())
     }
     private var topChrome: some View {
         HStack(spacing: 10) {
@@ -236,7 +242,7 @@ import PhotosUI
             Button {
                 let selected = store.items.filter { selectedIDs.contains($0.id) }
                 let favorite = !selected.allSatisfy(\.favorite)
-                for var item in selected { item.favorite = favorite; store.update(item) }
+                for var item in selected { item.favorite = favorite; store.update(item, deferred: true) }
             } label: { Image(systemName: "star") }.disabled(selectedIDs.isEmpty).accessibilityLabel("Favoriten ändern")
             Button { for id in selectedIDs { store.trash(id) }; selectedIDs.removeAll(); selecting = false } label: { Image(systemName: "trash") }.disabled(selectedIDs.isEmpty).accessibilityLabel("Auswahl in Papierkorb")
         }.font(.system(size: 15)).foregroundStyle(Theme.accent)
@@ -262,6 +268,7 @@ import PhotosUI
         }.padding(.horizontal, 16)
     }
     private func navigate(favorites: Bool = false, trash: Bool = false) {
+        navigationGeneration += 1
         forward = true
         withAnimation(.easeInOut(duration: 0.25)) { self.favorites = favorites; self.trash = trash; librarySection = nil; folder = nil; filter = "Alle"; selecting = false; selectedIDs.removeAll(); activeMenu = nil }
     }
@@ -269,10 +276,15 @@ import PhotosUI
     /// Folders push like Goodnotes: the direction is set first so both the leaving and the arriving grid slide the same way.
     private func go(to target: String?, forward: Bool) {
         self.forward = forward
-        DispatchQueue.main.async { withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) { folder = target; favorites = false } }
+        navigationGeneration += 1
+        let generation = navigationGeneration
+        DispatchQueue.main.async {
+            guard navigationGeneration == generation else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.92)) { folder = target; favorites = false; activeMenu = nil; contextID = nil }
+        }
     }
     private func remember(_ location: CGPoint) {
-        let size = UIScreen.main.bounds.size
+        let size = librarySize
         guard size.width > 0, size.height > 0 else { return }
         store.openAnchor = UnitPoint(x: min(1, max(0, location.x / size.width)), y: min(1, max(0, location.y / size.height)))
     }
@@ -337,7 +349,7 @@ import PhotosUI
             let url = try DocumentMediaPDF.write(images)
             defer { try? FileManager.default.removeItem(at: url) }
             var item = try await NotebookArchive.importAsync(url, into: store, parent: folder)
-            item.title = title; store.update(item); store.open(item.id)
+            item.title = title; store.update(item, deferred: true); store.open(item.id)
         } catch { store.error = error.localizedDescription }
     }
     private func open(_ item: LibraryItem) {
@@ -351,8 +363,8 @@ import PhotosUI
                     Group {
                         if item.folder { FolderArtwork(color: item.color, symbol: item.symbol).frame(width: 146, height: 126).frame(height: 152, alignment: .bottom) }
                         else if let page = item.pages.first {
-                            if item.kind == .whiteboard { WhiteboardArtwork(page: page, directory: store.directory(item.id)).frame(width: 162, height: 122).frame(height: 152, alignment: .bottom) }
-                            else { NotebookPreview(page: page, directory: store.directory(item.id), cover: true).frame(width: 134, height: 152) }
+                            if item.kind == .whiteboard { WhiteboardArtwork(page: page, directory: store.directory(item.id), revision: thumbnailRevision).frame(width: 162, height: 122).frame(height: 152, alignment: .bottom) }
+                            else { NotebookPreview(page: page, directory: store.directory(item.id), cover: true, revision: thumbnailRevision).frame(width: 134, height: 152) }
                         }
                     }.frame(width: 146, height: 152, alignment: .bottom)
                 }
@@ -362,7 +374,7 @@ import PhotosUI
             HStack(spacing: 4) { Text(item.title).font(.system(size: 13.5)).lineLimit(2).multilineTextAlignment(.center); chevron(item) }.frame(minHeight: 28).padding(.top, 9)
             Text(Theme.libraryDate.string(from: item.modified)).font(.system(size: 10)).foregroundStyle(Color(hex: "#8A8989")).lineLimit(1)
         }
-        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { remember($0.location) })
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("library")).onEnded { remember($0.location) })
         .contextMenu { contextActions(item) }
     }
     private func itemRow(_ item: LibraryItem) -> some View {
@@ -370,7 +382,7 @@ import PhotosUI
             Button { open(item) } label: { HStack(spacing: 16) { Image(systemName: item.folder ? (item.symbol ?? "folder.fill") : "book.closed.fill").font(.system(size: 26)).foregroundStyle(Color(hex: item.color)); VStack(alignment: .leading, spacing: 4) { Text(item.title).foregroundStyle(.white); Text(Theme.libraryDate.string(from: item.modified)).font(.caption).foregroundStyle(Theme.secondary) } }.frame(maxWidth: .infinity, alignment: .leading) }
             Button { if selecting { open(item) } else { store.toggleFavorite(item.id) } } label: { Image(systemName: selecting ? (selectedIDs.contains(item.id) ? "checkmark.circle.fill" : "circle") : (item.favorite ? "star.fill" : "star")).foregroundStyle(selecting ? Theme.accent : Theme.secondary) }; chevron(item)
         }.padding(.vertical, 14)
-        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { remember($0.location) })
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("library")).onEnded { remember($0.location) })
         .contextMenu { contextActions(item) }
     }
     private func chevron(_ item: LibraryItem) -> some View {
@@ -408,10 +420,10 @@ import PhotosUI
         NavigationStack {
             Form {
                 if let item = editItem {
-                    if action == .color { colorChoices(selected: item.color) { c in var updated = item; updated.color = c; store.update(updated); editing = nil } }
+                    if action == .color { colorChoices(selected: item.color) { c in var updated = item; updated.color = c; store.update(updated, deferred: true); editing = nil } }
                     if action == .symbol {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 48))], spacing: 18) {
-                            ForEach(["folder", "star", "leaf", "flask", "book", "globe", "clock", "paintpalette", "function", "atom", "graduationcap", "heart"], id: \.self) { symbol in Button { var updated = item; updated.symbol = symbol == "folder" ? nil : symbol; store.update(updated); editing = nil } label: { Image(systemName: symbol).font(.system(size: 25)).frame(width: 44, height: 44).foregroundStyle(Theme.accent) } }
+                            ForEach(["folder", "star", "leaf", "flask", "book", "globe", "clock", "paintpalette", "function", "atom", "graduationcap", "heart"], id: \.self) { symbol in Button { var updated = item; updated.symbol = symbol == "folder" ? nil : symbol; store.update(updated, deferred: true); editing = nil } label: { Image(systemName: symbol).font(.system(size: 25)).frame(width: 44, height: 44).foregroundStyle(Theme.accent) } }
                         }
                     }
                     if action == .move {

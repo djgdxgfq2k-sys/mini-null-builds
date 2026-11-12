@@ -56,7 +56,14 @@ struct ArchiveManifest: Codable {
 }
 
 @MainActor final class LibraryStore: ObservableObject {
-    @Published private(set) var items: [LibraryItem] = []
+    @Published private(set) var items: [LibraryItem] = [] {
+        didSet { itemIndices = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first }); trashCache.removeAll(keepingCapacity: true) }
+    }
+    private var itemIndices: [String: Int] = [:]
+    private var trashCache: [String: Bool] = [:]
+    private let saveQueue = DispatchQueue(label: "studio.nullmini.library-save", qos: .utility)
+    private var pendingSave: DispatchWorkItem?
+    private var saveGeneration = 0
     @Published var opened: [String] = []
     @Published var active: String?
     /// Where on screen the notebook being opened was tapped; the editor zooms out of that point.
@@ -75,12 +82,36 @@ struct ArchiveManifest: Codable {
                 items = try JSONDecoder().decode([LibraryItem].self, from: Data(contentsOf: index))
             } else { try seed() }
         } catch { writable = false; self.error = "Bibliothek konnte nicht geladen werden: \(error.localizedDescription)" }
+        itemIndices = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
     }
     func directory(_ id: String) -> URL { root.appendingPathComponent(id, isDirectory: true) }
-    func item(_ id: String?) -> LibraryItem? { items.first { $0.id == id } }
+    func item(_ id: String?) -> LibraryItem? {
+        guard let id, let index = itemIndices[id] else { return nil }; return items[index]
+    }
     func save() throws {
         guard writable else { throw NotebookError.invalid("Der gespeicherte Bibliotheksindex ist nicht lesbar und wird nicht überschrieben.") }
-        try JSONEncoder().encode(items).write(to: root.appendingPathComponent("library.json"), options: .atomic)
+        pendingSave?.cancel(); pendingSave = nil; saveGeneration += 1
+        let snapshot = items, url = root.appendingPathComponent("library.json")
+        // A synchronous checkpoint for imports and transactional page edits. Serialize with
+        // deferred UI saves so an older snapshot can never overwrite a newer checkpoint.
+        try saveQueue.sync { try JSONEncoder().encode(snapshot).write(to: url, options: .atomic) }
+    }
+    private func scheduleSave() {
+        pendingSave?.cancel(); saveGeneration += 1
+        let generation = saveGeneration, snapshot = items, url = root.appendingPathComponent("library.json")
+        let task = DispatchWorkItem { [weak self] in
+            do { try JSONEncoder().encode(snapshot).write(to: url, options: .atomic) }
+            catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.saveGeneration == generation else { return }
+                    // Keep the current in-memory edits available for retry; never roll back
+                    // an old snapshot over edits made while this write was in flight.
+                    self.error = message
+                }
+            }
+        }
+        pendingSave = task; saveQueue.asyncAfter(deadline: .now() + 0.25, execute: task)
     }
     @discardableResult func add(title: String, parent: String? = nil, folder: Bool = false, color: String = "#34C759") -> LibraryItem? {
         guard writable else { error = "Der gespeicherte Bibliotheksindex muss zuerst wiederhergestellt werden."; return nil }
@@ -91,9 +122,10 @@ struct ArchiveManifest: Codable {
             items.append(item); try save(); return item
         } catch { items.removeAll { $0.id == item.id }; self.error = error.localizedDescription; return nil }
     }
-    func update(_ item: LibraryItem) {
-        guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
+    func update(_ item: LibraryItem, deferred: Bool = false) {
+        guard writable, let i = itemIndices[item.id], items[i] != item else { return }
         let old = items[i]; items[i] = item
+        if deferred { scheduleSave(); return }
         do { try save() } catch { items[i] = old; self.error = error.localizedDescription }
     }
     func move(_ id: String, into parent: String?) {
@@ -102,19 +134,22 @@ struct ArchiveManifest: Codable {
         while let p = cursor { guard p != id, visited.insert(p).inserted else { return }; cursor = item(p)?.parent }
         it.parent = parent; update(it)
     }
-    func open(_ id: String) { guard let it = item(id), !it.folder else { return }; if !opened.contains(id) { opened.append(id) }; active = id }
+    func open(_ id: String) { guard let it = item(id), !it.folder, !isTrashed(id) else { return }; if !opened.contains(id) { opened.append(id) }; if active != id { active = id } }
     func close(_ id: String) { opened.removeAll { $0 == id }; if active == id { active = opened.last } }
     func addPage(_ id: String, paper: String = "lined") {
         guard var it = item(id) else { return }; var page = NotebookPage(); page.paper = paper
         it.pages.append(page); it.modified = Date(); update(it)
     }
-    func toggleFavorite(_ id: String) { guard var it = item(id) else { return }; it.favorite.toggle(); update(it) }
+    func toggleFavorite(_ id: String) { guard var it = item(id) else { return }; it.favorite.toggle(); update(it, deferred: true) }
     func isTrashed(_ id: String) -> Bool {
+        if let cached = trashCache[id] { return cached }
         var cursor: String? = id; var seen = Set<String>()
+        var result = false
         while let current = cursor, seen.insert(current).inserted, let it = item(current) {
-            if it.trashed == true { return true }; cursor = it.parent
+            if let cached = trashCache[current] { result = cached; break }
+            if it.trashed == true { result = true; break }; cursor = it.parent
         }
-        return false
+        for visited in seen { trashCache[visited] = result }; return result
     }
     func trash(_ id: String) {
         guard var it = item(id) else { return }; it.trashed = true; update(it)

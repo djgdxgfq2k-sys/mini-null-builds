@@ -90,7 +90,7 @@ struct OriginalInk {
         return (points, width, ink)
     }
 
-    static func read(_ data: Data, convert: Bool = false) throws -> OriginalInk {
+    static func read(_ data: Data, convert: Bool = false, overlayOnly: Bool = false) throws -> OriginalInk {
         var result = OriginalInk()
         let date = Date(timeIntervalSince1970: 0)
         let records = try WireMessage.records(data)
@@ -107,7 +107,7 @@ struct OriginalInk {
             }
             if let field = record[21], let m = try? field.message() {
                 if let id = m[1]?.string, deleted.contains(id) { continue }
-                if let box = text(m) { result.texts.append(box) }
+                if !overlayOnly, let box = text(m) { result.texts.append(box) }
                 continue
             }
             if let field = record[22], let m = try? field.message() {
@@ -115,7 +115,7 @@ struct OriginalInk {
                 if let line = connector(m) {
                     if convert {
                         let lines = [line.points.map { InkPoint(point: $0, radius: line.width / 2) }]
-                        result.editable += lines.compactMap { editableStroke(densified($0), offset: .identity, color: line.color, marker: false, variable: false, date: date) }
+                        if !overlayOnly { result.editable += lines.compactMap { editableStroke(densified($0), offset: .identity, color: line.color, marker: false, variable: false, date: date) } }
                     } else {
                         let path = CGMutablePath(); path.addLines(between: line.points)
                         result.strokes.append(OriginalStroke(path: path, color: line.color, width: line.width, filled: false))
@@ -144,7 +144,7 @@ struct OriginalInk {
                 let marker = m[5]?.integer == 1
                 if convert, [0, 1, 4, 5].contains(type) {
                     let lines = try centerlines(raw, type: Int(type))
-                    result.editable += lines.compactMap { editableStroke($0, offset: offset, color: c, marker: marker, variable: type == 1 || type == 4, pencil: type == 5, date: date) }
+                    if !overlayOnly { result.editable += lines.compactMap { editableStroke($0, offset: offset, color: c, marker: marker, variable: type == 1 || type == 4, pencil: type == 5, date: date) } }
                     continue
                 }
                 if type == 0 { if let stroke = try constant(raw, color: c) { result.strokes.append(stroke.moved(offset)) } }
