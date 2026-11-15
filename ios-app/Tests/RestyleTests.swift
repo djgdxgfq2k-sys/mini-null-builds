@@ -44,6 +44,18 @@ import PencilKit
         XCTAssertLessThan((distances.max() ?? 0) - (distances.min() ?? 0), 4, "the held circle is a clean circle")
     }
 
+    func testSparseStrokeIsSmoothedWithoutChangingItsWidth() async throws {
+        var settings = ToolSettings(); settings.tool = .pen; settings.penStyle = .ballpoint; settings.width = 2
+        let (coordinator, view, root) = try setUp(settings); defer { try? FileManager.default.removeItem(at: root) }
+        let sparse = [CGPoint(x: 50, y: 200), CGPoint(x: 100, y: 120), CGPoint(x: 160, y: 100), CGPoint(x: 220, y: 140), CGPoint(x: 260, y: 220)]
+        try await write(native(sparse, created: Date(), duration: 0.2), coordinator: coordinator, view: view)
+        let stroke = try XCTUnwrap(coordinator.drawing.strokes.last)
+        XCTAssertEqual(coordinator.drawing.strokes.count, 1, "one stroke in, one stroke out")
+        XCTAssertGreaterThan(stroke.path.count, 50, "a quick stroke gets enough points to stay round when zoomed in")
+        XCTAssertEqual(stroke.path.map(\.size.width).max() ?? 0, 2, accuracy: 0.01, "smoothing must not change the thickness")
+        XCTAssertEqual(stroke.path.map(\.size.width).min() ?? 0, 2, accuracy: 0.01)
+    }
+
     func testThinnestPenStaysVisibleAfterLifting() async throws {
         var settings = ToolSettings(); settings.tool = .pen; settings.penStyle = .ballpoint; settings.width = 0.1417322856119756
         let (coordinator, view, root) = try setUp(settings); defer { try? FileManager.default.removeItem(at: root) }

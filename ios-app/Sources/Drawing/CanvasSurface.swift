@@ -356,7 +356,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                     }
                 }
                 // Plain writing stays exactly as PencilKit drew it; only patterns, held shapes and tape rebuild.
-                if settings.strokePattern == .solid && shape == nil && !(settings.tool == .marker && settings.tape) && settings.tool != .shapes { made = [stroke] }
+                if settings.strokePattern == .solid && shape == nil && !(settings.tool == .marker && settings.tape) && settings.tool != .shapes { made = [stroke.densified()] }
                 rebuilt += made
             }
             let unchanged = rebuilt.count == added.count && zip(rebuilt, added).allSatisfy { $0.path.creationDate == $1.path.creationDate && $0.path.count == $1.path.count && $0.ink.inkType == $1.ink.inkType && $0.path.first?.size == $1.path.first?.size }
@@ -956,6 +956,17 @@ enum PencilKitZoom {
         let ratio = widths[widths.count / 2] / toolWidth
         // Dividing stores about 1/scale of the tool width; not dividing stores about the tool width.
         dividesByZoom = ratio < (1 + 1 / renderScale) / 2
+    }
+}
+
+extension PKStroke {
+    /// PencilKit keeps few points for a quick stroke, so it showed straight corners when zoomed in (seen on the
+    /// device). Re-sampling along PencilKit's own curve keeps the line, its widths and timing, just smoother.
+    func densified(spacing: CGFloat = 0.5) -> PKStroke {
+        guard path.count >= 3 else { return self }
+        let points = Array(path.interpolatedPoints(by: .distance(spacing)))
+        guard points.count > path.count else { return self }
+        return PKStroke(ink: ink, path: PKStrokePath(controlPoints: points, creationDate: path.creationDate), transform: transform, mask: mask, randomSeed: randomSeed)
     }
 }
 
