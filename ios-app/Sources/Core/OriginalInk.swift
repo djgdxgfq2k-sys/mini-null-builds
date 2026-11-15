@@ -176,7 +176,8 @@ struct OriginalInk {
         var lines: [[InkPoint]] = []
         func sampleQuad(_ a: InkPoint, _ control: InkPoint, _ b: InkPoint, into line: inout [InkPoint]) {
             let length = hypot(control.point.x - a.point.x, control.point.y - a.point.y) + hypot(b.point.x - control.point.x, b.point.y - control.point.y)
-            let steps = max(1, min(64, Int((length / 1.5).rounded(.up))))
+            // PencilKit joins points with nearly straight pieces: 1.5 pt apart showed corners on curves when zoomed in.
+            let steps = max(1, min(256, Int((length / 0.5).rounded(.up))))
             for i in 1 ... steps {
                 let t = CGFloat(i) / CGFloat(steps), u = 1 - t
                 let x = u * u * a.point.x + 2 * u * t * control.point.x + t * t * b.point.x

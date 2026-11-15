@@ -54,7 +54,7 @@ final class OriginalInkConversionTests: XCTestCase {
         XCTAssertEqual(points.first?.location.y ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(points.last?.location.x ?? 0, 150, accuracy: 0.01)
         XCTAssertEqual(points.first?.size.width ?? 0, 2, accuracy: 0.01)
-        XCTAssertGreaterThan(points.count, 10, "curves are sampled densely enough to erase precisely")
+        XCTAssertGreaterThan(points.count, 150, "a 100 pt curve gets a point every 0.5 pt so it stays round when zoomed in")
 
         let overlay = try OriginalInk.read(data)
         XCTAssertTrue(overlay.editable.isEmpty)
