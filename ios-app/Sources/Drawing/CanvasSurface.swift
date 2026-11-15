@@ -735,13 +735,15 @@ final class PageViewport: UIView, UITextViewDelegate, UIScrollViewDelegate {
     /// Scale PencilKit renders the ink at, matching the on-screen zoom so strokes stay pixel-sharp.
     private(set) var renderScale: CGFloat = 1
     func updateRenderScale() {
-        // Quarter steps keep PencilKit from re-rendering on every tiny zoom change.
+        // Render at the exact on-screen zoom (this only runs when a zoom ends): rounding up to quarter steps
+        // made the canvas shrink its bitmap by up to 20%, which left stroke edges grainy.
         // While a stroke is live PencilKit redraws the whole canvas in one layer; past this size the
         // existing ink could vanish until the Pencil lifted, so the sharp canvas stays within 8192 pixels (sharp up to about 4.8x on A4).
+        // Below 1 the tool width would fall under PencilKit's minimum and strokes would come out thicker than drawn.
         let longest = max(1, max(document.bounds.width, document.bounds.height) * (window?.screen.scale ?? 2))
         let budget = max(1, (8192 / longest * 4).rounded(.down) / 4)
-        let target = min(PageViewport.maximumZoom, budget, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
-        wantedScale = min(PageViewport.maximumZoom, max(1, (outerZoom * scroll.zoomScale * 4).rounded(.up) / 4))
+        wantedScale = min(PageViewport.maximumZoom, max(1, outerZoom * scroll.zoomScale))
+        let target = min(budget, wantedScale)
         InkDiagnostics.log("zoom outer=\(outerZoom) inner=\(scroll.zoomScale) wanted=\(wantedScale) budget=\(budget) target=\(target) render=\(renderScale) overlay=\(wantedScale > target + 0.01)")
         guard target != renderScale else { updateInkDetail(); return }
         renderScale = target; layoutCanvas(); updateInkDetail(); onRenderScale?()
