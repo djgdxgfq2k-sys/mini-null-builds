@@ -23,16 +23,21 @@ import FoundationModels
         return false
     }
 
+    /// Vision OCR with the user's language first; shared by the page assistant and the handwriting studio.
+    nonisolated static func recognizeText(_ cg: CGImage) -> [String] {
+        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
+        let chosen = ["Deutsch": "de-DE", "English": "en-US", "Français": "fr-FR", "Español": "es-ES"][UserDefaults.standard.string(forKey: "nullmini.language") ?? ""]
+        request.recognitionLanguages = (chosen.map { [$0] } ?? []) + ["de-DE", "en-US"].filter { $0 != chosen }
+        try? VNImageRequestHandler(cgImage: cg).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    }
+
     func read(page: NotebookPage, directory: URL) async {
         status = "Seite wird gelesen …"
         let text = await Task.detached(priority: .userInitiated) { () -> String in
             var parts: [String] = []
             if let image = try? NotebookThumbnail.render(page: page, directory: directory, width: 1600), let cg = image.cgImage {
-                let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
-                let chosen = ["Deutsch": "de-DE", "English": "en-US", "Français": "fr-FR", "Español": "es-ES"][UserDefaults.standard.string(forKey: "nullmini.language") ?? ""]
-                request.recognitionLanguages = (chosen.map { [$0] } ?? []) + ["de-DE", "en-US"].filter { $0 != chosen }
-                try? VNImageRequestHandler(cgImage: cg).perform([request])
-                parts += (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                parts += PageAssistant.recognizeText(cg)
             }
             return parts.joined(separator: "\n")
         }.value

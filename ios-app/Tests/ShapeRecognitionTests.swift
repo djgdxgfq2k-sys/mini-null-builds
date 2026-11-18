@@ -46,6 +46,7 @@ import UIKit
         let done = expectation(description: "Shape committed"); DispatchQueue.main.async { done.fulfill() }; await fulfillment(of: [done], timeout: 2)
         XCTAssertEqual(coordinator.drawing.strokes.count, 2); XCTAssertNotNil(coordinator.drawing.strokes.first?.mask)
         XCTAssertGreaterThan(coordinator.drawing.bounds.width, 190)
+        XCTAssertTrue(coordinator.persist(force: false)) // per-stroke saves are debounced
         let restored = try DrawingDisk.load(root, page.id)
         XCTAssertEqual(restored.strokes.count, 2); XCTAssertNotNil(restored.strokes.first?.mask)
         let image = restored.image(from: CGRect(x: 0, y: 0, width: 300, height: 250), scale: 1)

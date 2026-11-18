@@ -83,6 +83,7 @@ struct DocumentMorePopover: View {
     var goToPage: (Int) -> Void = { _ in }
     var clearObjects: (ClearKind) -> Void = { _ in }
     var customizeToolbar: () -> Void = {}
+    var study: (() -> Void)? = nil
     @State private var goingToPage = false
     @State private var pageInput = ""
     var body: some View {
@@ -122,6 +123,7 @@ struct DocumentMorePopover: View {
                     }
                     ReferenceActionGroup {
                         ReferenceActionRow("Umbenennen", asset: "general/edit-01", action: rename)
+                        if let study { ReferenceActionRow("Lernen", asset: "general/edit-01", action: study) }
                         ReferenceActionRow("Werkzeugleiste anpassen", asset: "general/settings-02", action: customizeToolbar)
                         Toggle("Nur lesen", isOn: readOnly).font(.system(size: 15)).padding(.horizontal, 14).frame(height: 44.5)
                         Toggle("Mit Finger zeichnen", isOn: finger).font(.system(size: 15)).padding(.horizontal, 14).frame(height: 44.5)

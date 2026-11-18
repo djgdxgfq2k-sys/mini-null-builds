@@ -26,6 +26,7 @@ final class PassthroughView:UIView {
     let pageSize:CGSize
     let directory:URL
     private let knight = UIView()
+    private let sceneView = SCNView()
     private var browser:UIViewController?
     init(commands:CanvasCommands,pageSize:CGSize,directory:URL) { self.commands = commands; self.pageSize = pageSize; self.directory = directory; super.init(nibName:nil,bundle:nil) }
     required init?(coder:NSCoder) { nil }
@@ -34,7 +35,7 @@ final class PassthroughView:UIView {
         super.viewDidLoad(); view.addSubview(knight); knight.translatesAutoresizingMaskIntoConstraints = false
         knight.isHidden = !(UserDefaults.standard.object(forKey: "nullmini.knightVisible") as? Bool ?? false)
         NSLayoutConstraint.activate([knight.trailingAnchor.constraint(equalTo:view.trailingAnchor,constant:-16),knight.bottomAnchor.constraint(equalTo:view.bottomAnchor,constant:-32),knight.widthAnchor.constraint(equalToConstant:76),knight.heightAnchor.constraint(equalToConstant:110)])
-        let sceneView = SCNView(); sceneView.scene = makeKnight(); sceneView.backgroundColor = .clear; sceneView.autoenablesDefaultLighting = true; sceneView.isUserInteractionEnabled = false; sceneView.preferredFramesPerSecond = 15; sceneView.antialiasingMode = .multisampling2X; sceneView.frame = CGRect(x:0,y:0,width:76,height:110); knight.addSubview(sceneView)
+        let sceneView = self.sceneView; sceneView.rendersContinuously = false; sceneView.scene = makeKnight(); sceneView.backgroundColor = .clear; sceneView.autoenablesDefaultLighting = true; sceneView.isUserInteractionEnabled = false; sceneView.preferredFramesPerSecond = 15; sceneView.antialiasingMode = .multisampling2X; sceneView.frame = CGRect(x:0,y:0,width:76,height:110); knight.addSubview(sceneView)
         let button = UIButton(type:.custom); button.frame = sceneView.frame; button.accessibilityLabel = "Ritter-Menü"; button.showsMenuAsPrimaryAction = true
         button.menu = UIMenu(title:"NullMini",children:[
             UIAction(title:"Solve Here",image:UIImage(systemName:"sparkles")) { [weak self] _ in self?.showSolver() },
@@ -44,14 +45,21 @@ final class PassthroughView:UIView {
             UIAction(title:"Dell-Server-Control",image:UIImage(systemName:"server.rack")) { [weak self] _ in self?.presentModule(title:"Server-Control",content:ServerControlView()) },
             UIMenu(options:.displayInline,children:[
                 UIAction(title:"Handschrift-Studio",image:UIImage(systemName:"pencil.and.scribble")) { [weak self] _ in guard let self else { return }; self.presentModule(title:"Handschrift-Studio",content:HandwritingStudio(commands:self.commands,pageSize:self.pageSize,directory:self.directory)) },
-                UIAction(title:"Verbindungen",image:UIImage(systemName:"network")) { [weak self] _ in self?.presentModule(title:"Verbindungen",content:ConnectionsView()) }
+                UIAction(title:"Verbindungen",image:UIImage(systemName:"network")) { [weak self] _ in self?.presentModule(title:"Verbindungen",content:ConnectionsView()) },
+                // shortcut: scans are not inserted into the notebook yet; wire to EditorPageImport.insert when needed.
+                UIAction(title:"Kamera-Scanner",image:UIImage(systemName:"doc.viewfinder")) { [weak self] _ in self?.presentModule(title:"Kamera-Scanner",content:DocumentScanner { [weak self] result in self?.dismiss(animated:true); if case .failure(let error) = result { self?.commands.reportError(error.localizedDescription) } }) }
             ])
         ])
         knight.addSubview(button)
         commands.toggleKnight = { [weak self] in self?.toggleStealth() }
+        NotificationCenter.default.addObserver(self,selector:#selector(updatePlaying),name:UIApplication.willResignActiveNotification,object:nil)
+        NotificationCenter.default.addObserver(self,selector:#selector(updatePlaying),name:UIApplication.didBecomeActiveNotification,object:nil)
+        updatePlaying()
     }
+    /// Render only while the knight is visible and the app is active.
+    @objc private func updatePlaying(_ note:Notification? = nil) { sceneView.isPlaying = !knight.isHidden && note?.name != UIApplication.willResignActiveNotification && UIApplication.shared.applicationState != .background }
     func toggleStealth() {
-        knight.isHidden.toggle()
+        knight.isHidden.toggle(); updatePlaying()
         UserDefaults.standard.set(!knight.isHidden, forKey: "nullmini.knightVisible")
         if knight.isHidden, let browser { remove(browser); self.browser = nil }
     }

@@ -35,6 +35,7 @@ import UIKit
         viewport.synchronize(pages: pages, settings: ToolSettings(), selected: 0); viewport.layoutIfNeeded()
         let first = try XCTUnwrap(viewport.coordinator(for: pages[0].id))
         first.append([StrokeFactory.stroke(points: [.zero, CGPoint(x: 90, y: 80)], color: .blue, width: 2)])
+        XCTAssertTrue(first.persist(force: false)) // per-stroke saves are debounced
         let url = DrawingDisk.url(root, pages[0].id)
         try FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

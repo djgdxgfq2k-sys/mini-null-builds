@@ -174,7 +174,10 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             do { drawing = try DrawingDisk.load(directory, page.id) }
             catch { writable = false; DispatchQueue.main.async { commands.reportError("Gespeicherte Zeichnung konnte nicht geladen werden. Sie wird nicht überschrieben: \(error.localizedDescription)") } }
             needsSave = false
+            // Debounced saves must not be lost if the app is suspended or killed from the app switcher.
+            NotificationCenter.default.addObserver(self, selector: #selector(resignActive), name: UIApplication.willResignActiveNotification, object: nil)
         }
+        @objc private func resignActive() { viewport?.inkInput.finishPendingStroke(); persist(force: false) }
         func attach(_ view: PageViewport) {
             viewport = view; canvas = view.canvas
             // Only initialization assigns persisted state; the delegate is installed afterwards.
@@ -400,7 +403,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
                 guard let self else { return }
                 if self.usingTool { self.schedulePersist() } else { self.autosave() }
             }
-            pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
+            pendingPersist = task; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
         }
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             InkDiagnostics.log("end tool=\(currentSettings?.tool.rawValue ?? "-") strokes=\(canvasView.drawing.strokes.count) start=\(toolStart?.strokes.count ?? -1)")
@@ -480,7 +483,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
         private func replaceByUserCommand(_ next: PKDrawing, canvas: PKCanvasView) {
             let before = drawing
             registerUndo(before, canvas: canvas)
-            drawing = next; canvas.drawing = next; viewport?.inkDetail.update(next); persist(); commands?.refreshUndo()
+            drawing = next; canvas.drawing = next; viewport?.inkDetail.update(next); schedulePersist(); commands?.refreshUndo()
         }
         private func registerUndo(_ before: PKDrawing, canvas: PKCanvasView) {
             canvas.undoManager?.registerUndo(withTarget: self) { target in
@@ -488,7 +491,7 @@ enum EraserStyle: String, CaseIterable, Codable { case precision = "Präzisionsr
             }
         }
         private func finishFilteredErase() {
-            if filteredEraseChanged, let before = filteredEraseBefore, let canvas { registerUndo(before, canvas: canvas); persist() }
+            if filteredEraseChanged, let before = filteredEraseBefore, let canvas { registerUndo(before, canvas: canvas); schedulePersist() }
             filteredEraseBefore = nil; filteredEraseChanged = false
         }
     }

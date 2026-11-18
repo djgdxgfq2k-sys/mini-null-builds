@@ -63,6 +63,7 @@ import UIKit
         let coordinator = CanvasSurface.Coordinator(page: page, directory: directory, commands: commands)
         let viewport = PageViewport(page: page, directory: directory); coordinator.attach(viewport)
         coordinator.append([StrokeFactory.stroke(points: [.zero, CGPoint(x: 70, y: 90)], color: .blue, width: 2)])
+        XCTAssertTrue(coordinator.persist(force: false)) // per-stroke saves are debounced
         let before = try Data(contentsOf: DrawingDisk.url(directory, page.id))
         var settings = ToolSettings(); settings.tool = .pencil; coordinator.configure(settings)
         XCTAssertEqual((viewport.canvas.tool as? PKInkingTool)?.inkType, .pencil)

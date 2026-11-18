@@ -37,7 +37,7 @@ struct FolderCreationView: View {
                 HStack {
                     roundButton("xmark", color: Color(hex: "#181818")) { close() }
                     Spacer(); Text("Neuer Ordner").font(.system(size: 17, weight: .semibold)); Spacer()
-                    roundButton("checkmark", color: Color(referenceHex: "#3F8EF7")) { create(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unbenannt" : title, color, symbol); close() }
+                    roundButton("checkmark", color: Color(referenceHex: "#3F8EF7")) { let name = title.trimmingCharacters(in: .whitespacesAndNewlines); let subject = color == ReferenceLayout.folderPalette[13] ? Theme.subjects.firstIndex(of: name) : nil; create(name.isEmpty ? "Unbenannt" : title, subject.map { Theme.folders[$0] } ?? color, symbol); close() }
                 }.padding(.horizontal, 10).padding(.top, 4).offset(y: -6)
                 Spacer(minLength: 20)
                 FolderArtwork(color: color, symbol: symbol).frame(width: 202, height: 174).frame(width: 180, height: 155).offset(y: -3.5).padding(.bottom, 42)

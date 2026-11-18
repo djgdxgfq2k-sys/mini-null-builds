@@ -20,12 +20,20 @@ struct HandwritingProfile: Codable {
     static let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789äöüßÄÖÜ.,!?;:-+=()")
     init(directory:URL) {
         url = directory.appendingPathComponent("handwriting-profile.json")
+        Self.latest = self
         if FileManager.default.fileExists(atPath:url.path) {
             do { profile = try JSONDecoder().decode(HandwritingProfile.self,from:Data(contentsOf:url)) }
             catch { writable = false; message = "Schriftprofil konnte nicht gelesen werden: \(error.localizedDescription)" }
         }
     }
-    func save() throws { guard writable else { throw NotebookError.invalid("Das beschädigte Schriftprofil wird nicht überschrieben.") }; try JSONEncoder().encode(profile).write(to:url,options:.atomic) }
+    /// Encodes now, writes on a serial queue (ordered, atomic) so the main thread never waits on disk; write errors surface in `message`.
+    func save() throws {
+        guard writable else { throw NotebookError.invalid("Das beschädigte Schriftprofil wird nicht überschrieben.") }
+        let data = try JSONEncoder().encode(profile), url = url
+        Self.writeQueue.async { do { try data.write(to:url,options:.atomic) } catch { let text = error.localizedDescription; Task { @MainActor in HandwritingLibrary.latest?.message = "Schriftprofil konnte nicht gespeichert werden: \(text)" } } }
+    }
+    private static let writeQueue = DispatchQueue(label:"nullmini.handwriting.save")
+    private static weak var latest: HandwritingLibrary?
     func train(_ character:Character,drawing:PKDrawing) throws {
         guard writable else { throw NotebookError.invalid("Das gespeicherte Schriftprofil muss zuerst wiederhergestellt werden.") }
         guard !drawing.strokes.isEmpty, drawing.bounds.width > 0, drawing.bounds.height > 0 else { throw NotebookError.invalid("Schreibe zuerst das Zeichen in das Übungsfeld.") }
@@ -150,7 +158,7 @@ struct SeededRandom {
                         TrainingPad(controller:pad).frame(height:180).clipShape(RoundedRectangle(cornerRadius:12)).overlay { RoundedRectangle(cornerRadius:12).stroke(Color.gray.opacity(0.2)) }
                         Button("Variante speichern") { do { try library.train(selected,drawing:pad.drawing()); pad.clear() } catch { library.message = error.localizedDescription } }.buttonStyle(.borderedProminent)
                     } else {
-                        HStack { Text("Auf das aktuelle Blatt schreiben").font(.title2.bold()); Spacer(); Button("Blatt analysieren") { library.analyze(commands.snapshot(),original:commands.target?.viewport?.original.ink ?? OriginalInk()) } }
+                        HStack { Text("Auf das aktuelle Blatt schreiben").font(.title2.bold()); Spacer(); Button("Meine Handschrift analysieren") { analyzePage() } }
                         TextEditor(text:$text).scrollContentBackground(.hidden).frame(height:140).padding(8).background(Theme.sidebar,in:RoundedRectangle(cornerRadius:10)).overlay { RoundedRectangle(cornerRadius:10).stroke(Theme.border) }
                         HStack {
                             Button("Text schreiben") { do { let strokes = try library.synthesize(text,page:pageSize); try library.save(); commands.append(strokes); library.message = "\(strokes.count) Striche eingefügt." } catch { library.message = error.localizedDescription } }.buttonStyle(.borderedProminent).disabled(text.isEmpty)
@@ -169,6 +177,19 @@ struct SeededRandom {
         .onDisappear { do { try library.save() } catch { commands.reportError(error.localizedDescription) } }
     }
     private func slider(_ label:String,value:Binding<Double>,range:ClosedRange<Double>) -> some View { VStack(alignment:.leading) { HStack { Text(label); Spacer(); Text(value.wrappedValue.formatted(.number.precision(.fractionLength(1)))).monospacedDigit().foregroundStyle(.secondary) }; Slider(value:value,in:range) } }
+    /// Geometry estimate plus on-device Vision OCR of the current page's ink (same OCR as the page assistant).
+    private func analyzePage() {
+        let drawing = commands.snapshot(), size = pageSize
+        library.analyze(drawing,original:commands.target?.viewport?.original.ink ?? OriginalInk())
+        Task {
+            let lines = await Task.detached { () -> [String] in
+                let ink = drawing.image(from:CGRect(origin:.zero,size:size),scale:1), bounds = CGRect(origin:.zero,size:size)
+                let image = UIGraphicsImageRenderer(size:size).image { context in UIColor.white.setFill(); context.fill(bounds); ink.draw(in:bounds) }
+                return image.cgImage.map { PageAssistant.recognizeText($0) } ?? []
+            }.value
+            library.message += lines.isEmpty ? "\nTexterkennung: nichts erkannt." : "\nTexterkennung (\(lines.count) Zeilen): " + lines.joined(separator:" ").prefix(160)
+        }
+    }
     private func aiText() {
         busy = true
         Task { do { text = try await ExtensionAPI.generate(prompt:text); library.message = "Text bereit. Prüfe ihn vor dem Einsetzen." } catch { library.message = error.localizedDescription }; busy = false }
